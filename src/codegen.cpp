@@ -8968,8 +8968,6 @@ static Error define_builtin_compile_vars(CodeGen *g) {
     cache_bool(&cache_hash, detect_dynamic_link(g));
     cache_bool(&cache_hash, g->is_test_build);
     cache_bool(&cache_hash, g->is_single_threaded);
-    cache_bool(&cache_hash, g->enable_lto);
-    cache_bool(&cache_hash, g->enable_shadow_call_stack);
     cache_bool(&cache_hash, g->test_is_evented);
     cache_int(&cache_hash, g->code_model);
     cache_int(&cache_hash, g->zig_target->is_native_os);
@@ -9854,6 +9852,8 @@ Error create_c_object_cache(CodeGen *g, CacheHash **out_cache_hash, bool verbose
     cache_int(cache_hash, g->build_mode);
     cache_bool(cache_hash, g->have_pic);
     cache_bool(cache_hash, g->have_sanitize_c);
+    cache_bool(cache_hash, g->enable_lto);
+    cache_bool(cache_hash, g->enable_shadow_call_stack);
     cache_bool(cache_hash, want_valgrind_support(g));
     cache_bool(cache_hash, g->function_sections);
     cache_int(cache_hash, g->code_model);
@@ -10686,6 +10686,7 @@ static Error check_cache(CodeGen *g, Buf *manifest_dir, Buf *digest) {
     cache_bool(ch, g->enable_dump_analysis);
     cache_bool(ch, g->enable_doc_generation);
     cache_bool(ch, g->enable_lto);
+    cache_bool(ch, g->enable_shadow_call_stack);
     cache_bool(ch, g->emit_bin);
     cache_bool(ch, g->emit_llvm_ir);
     cache_bool(ch, g->emit_asm);
