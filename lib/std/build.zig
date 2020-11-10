@@ -2069,9 +2069,11 @@ pub const LibExeObjStep = struct {
                     try zig_args.append(self.builder.pathFromRoot(include_path));
                 },
                 .OtherStep => |other| {
-                    const h_path = other.getOutputHPath();
-                    try zig_args.append("-isystem");
-                    try zig_args.append(fs.path.dirname(h_path).?);
+                    if (!other.disable_gen_h) {
+                        const h_path = other.getOutputHPath();
+                        try zig_args.append("-isystem");
+                        try zig_args.append(fs.path.dirname(h_path).?);
+                    }
                 },
             }
         }
