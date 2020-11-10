@@ -1887,6 +1887,10 @@ static void construct_linker_job_elf(LinkJob *lj) {
     lj->args.append("-m");
     lj->args.append(getLDMOption(g->zig_target));
 
+    Buf *mcpu = buf_sprintf("--mllvm=-mcpu=%s", g->zig_target->llvm_cpu_name);
+    lj->args.append(buf_ptr(mcpu));
+    // TODO: specify target features
+
     bool is_lib = g->out_type == OutTypeLib;
     bool is_dyn_lib = g->is_dynamic && is_lib;
     if (!g->have_dynamic_link) {
