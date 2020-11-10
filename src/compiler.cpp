@@ -21,7 +21,7 @@ Buf *get_stage1_cache_path(void) {
         return &saved_stage1_path;
     }
     Error err;
-    if ((err = os_get_app_data_dir(&saved_app_data_dir, "zig"))) {
+    if ((err = os_get_app_data_dir(&saved_app_data_dir, "zig-tc"))) {
         fprintf(stderr, "Unable to get app data dir: %s\n", err_str(err));
         exit(1);
     }
