@@ -20,7 +20,7 @@ test "makePath, put some files in it, deleteTree" {
     try io.writeFile("os_test_tmp" ++ fs.path.sep_str ++ "b" ++ fs.path.sep_str ++ "c" ++ fs.path.sep_str ++ "file.txt", "nonsense");
     try io.writeFile("os_test_tmp" ++ fs.path.sep_str ++ "b" ++ fs.path.sep_str ++ "file2.txt", "blah");
     try fs.deleteTree("os_test_tmp");
-    if (fs.Dir.open("os_test_tmp")) |dir| {
+    if (fs.cwd().openDirTraverse("os_test_tmp")) |dir| {
         @panic("expected error");
     } else |err| {
         expect(err == error.FileNotFound);
@@ -111,7 +111,7 @@ test "AtomicFile" {
     const content = try io.readFileAlloc(allocator, test_out_file);
     expect(mem.eql(u8, content, test_content));
 
-    try fs.deleteFile(test_out_file);
+    try fs.cwd().deleteFile(test_out_file);
 }
 
 test "thread local storage" {
@@ -137,7 +137,7 @@ test "getrandom" {
     try os.getrandom(&buf_b);
     // If this test fails the chance is significantly higher that there is a bug than
     // that two sets of 50 bytes were equal.
-    expect(!mem.eql(u8, buf_a, buf_b));
+    expect(!mem.eql(u8, &buf_a, &buf_b));
 }
 
 test "getcwd" {
@@ -166,13 +166,13 @@ test "sigaltstack" {
 // analyzed
 const dl_phdr_info = if (@hasDecl(os, "dl_phdr_info")) os.dl_phdr_info else c_void;
 
-export fn iter_fn(info: *dl_phdr_info, size: usize, data: ?*usize) i32 {
+fn iter_fn(info: *dl_phdr_info, size: usize, data: ?*usize) callconv(.C) i32 {
     if (builtin.os == .windows or builtin.os == .wasi or builtin.os == .macosx)
         return 0;
 
     var counter = data.?;
     // Count how many libraries are loaded
-    counter.* += usize(1);
+    counter.* += @as(usize, 1);
 
     // The image should contain at least a PT_LOAD segment
     if (info.dlpi_phnum < 1) return -1;
@@ -234,6 +234,24 @@ test "pipe" {
 }
 
 test "argsAlloc" {
-    var args = try std.process.argsAlloc(std.heap.direct_allocator);
-    std.heap.direct_allocator.free(args);
+    var args = try std.process.argsAlloc(std.heap.page_allocator);
+    std.process.argsFree(std.heap.page_allocator, args);
+}
+
+test "memfd_create" {
+    // memfd_create is linux specific.
+    if (builtin.os != .linux) return error.SkipZigTest;
+    const fd = std.os.memfd_create("test", 0) catch |err| switch (err) {
+        // Related: https://github.com/ziglang/zig/issues/4019
+        error.SystemOutdated => return error.SkipZigTest,
+        else => |e| return e,
+    };
+    defer std.os.close(fd);
+    try std.os.write(fd, "test");
+    try std.os.lseek_SET(fd, 0);
+
+    var buf: [10]u8 = undefined;
+    const bytes_read = try std.os.read(fd, &buf);
+    expect(bytes_read == 4);
+    expect(mem.eql(u8, buf[0..4], "test"));
 }

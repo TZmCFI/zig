@@ -268,7 +268,7 @@ static void tree_print_struct(FILE *f, ZigType *struct_type, size_t indent) {
     ZigList<ZigType *> children = {};
     uint64_t sum_from_fields = 0;
     for (size_t i = 0; i < struct_type->data.structure.src_field_count; i += 1) {
-        TypeStructField *field = &struct_type->data.structure.fields[i];
+        TypeStructField *field = struct_type->data.structure.fields[i];
         children.append(field->type_entry);
         sum_from_fields += field->type_entry->abi_size;
     }
@@ -361,9 +361,9 @@ struct AnalDumpCtx {
 };
 
 static uint32_t anal_dump_get_type_id(AnalDumpCtx *ctx, ZigType *ty);
-static void anal_dump_value(AnalDumpCtx *ctx, AstNode *source_node, ZigType *ty, ConstExprValue *value);
+static void anal_dump_value(AnalDumpCtx *ctx, AstNode *source_node, ZigType *ty, ZigValue *value);
 
-static void anal_dump_poke_value(AnalDumpCtx *ctx, AstNode *source_node, ZigType *ty, ConstExprValue *value) {
+static void anal_dump_poke_value(AnalDumpCtx *ctx, AstNode *source_node, ZigType *ty, ZigValue *value) {
     Error err;
     if (value->type != ty) {
         return;
@@ -660,7 +660,7 @@ static void anal_dump_file(AnalDumpCtx *ctx, Buf *file) {
     jw_string(jw, buf_ptr(file));
 }
 
-static void anal_dump_value(AnalDumpCtx *ctx, AstNode *source_node, ZigType *ty, ConstExprValue *value) {
+static void anal_dump_value(AnalDumpCtx *ctx, AstNode *source_node, ZigType *ty, ZigValue *value) {
     Error err;
 
     if (value->type != ty) {
@@ -744,10 +744,10 @@ static void anal_dump_type(AnalDumpCtx *ctx, ZigType *ty) {
         case ZigTypeIdEnumLiteral:
             break;
         case ZigTypeIdStruct: {
-            if (ty->data.structure.is_slice) {
+            if (ty->data.structure.special == StructSpecialSlice) {
                 jw_object_field(jw, "len");
                 jw_int(jw, 2);
-                anal_dump_pointer_attrs(ctx, ty->data.structure.fields[slice_ptr_index].type_entry);
+                anal_dump_pointer_attrs(ctx, ty->data.structure.fields[slice_ptr_index]->type_entry);
                 break;
             }
 
@@ -803,7 +803,7 @@ static void anal_dump_type(AnalDumpCtx *ctx, ZigType *ty) {
 
                 for(size_t i = 0; i < ty->data.structure.src_field_count; i += 1) {
                     jw_array_elem(jw);
-                    anal_dump_type_ref(ctx, ty->data.structure.fields[i].type_entry);
+                    anal_dump_type_ref(ctx, ty->data.structure.fields[i]->type_entry);
                 }
                 jw_end_array(jw);
             }
@@ -1088,6 +1088,7 @@ static void anal_dump_node(AnalDumpCtx *ctx, const AstNode *node) {
             break;
         case NodeTypeContainerDecl:
             field_nodes = &node->data.container_decl.fields;
+            doc_comments_buf = &node->data.container_decl.doc_comments;
             break;
         default:
             break;
@@ -1215,7 +1216,7 @@ void zig_print_analysis_dump(CodeGen *g, FILE *f, const char *one_indent, const 
     jw_end_object(jw);
 
     jw_object_field(jw, "rootPkg");
-    anal_dump_pkg_ref(&ctx, g->root_package);
+    anal_dump_pkg_ref(&ctx, g->main_pkg);
 
     // Poke the functions
     for (size_t i = 0; i < g->fn_defs.length; i += 1) {
@@ -1248,7 +1249,7 @@ void zig_print_analysis_dump(CodeGen *g, FILE *f, const char *one_indent, const 
                 }
                 scope = scope->parent;
             }
-            ConstExprValue *result = entry->value;
+            ZigValue *result = entry->value;
 
             assert(fn != nullptr);
 

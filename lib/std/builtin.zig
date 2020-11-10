@@ -26,7 +26,8 @@ pub const subsystem: ?SubSystem = blk: {
             if (is_test) {
                 break :blk SubSystem.Console;
             }
-            if (@hasDecl(root, "WinMain") or
+            if (@hasDecl(root, "main") or
+                @hasDecl(root, "WinMain") or
                 @hasDecl(root, "wWinMain") or
                 @hasDecl(root, "WinMainCRTStartup") or
                 @hasDecl(root, "wWinMainCRTStartup"))
@@ -92,38 +93,28 @@ pub const Mode = enum {
 
 /// This data structure is used by the Zig language code generation and
 /// therefore must be kept in sync with the compiler implementation.
-pub const TypeId = enum {
-    Type,
-    Void,
-    Bool,
-    NoReturn,
-    Int,
-    Float,
-    Pointer,
-    Array,
-    Struct,
-    ComptimeFloat,
-    ComptimeInt,
-    Undefined,
-    Null,
-    Optional,
-    ErrorUnion,
-    ErrorSet,
-    Enum,
-    Union,
-    Fn,
-    BoundFn,
-    ArgTuple,
-    Opaque,
-    Frame,
-    AnyFrame,
-    Vector,
-    EnumLiteral,
+pub const CallingConvention = enum {
+    Unspecified,
+    C,
+    Cold,
+    Naked,
+    Async,
+    Interrupt,
+    Signal,
+    Stdcall,
+    Fastcall,
+    Vectorcall,
+    Thiscall,
+    APCS,
+    AAPCS,
+    AAPCSVFP,
 };
+
+pub const TypeId = @TagType(TypeInfo);
 
 /// This data structure is used by the Zig language code generation and
 /// therefore must be kept in sync with the compiler implementation.
-pub const TypeInfo = union(TypeId) {
+pub const TypeInfo = union(enum) {
     Type: void,
     Void: void,
     Bool: void,
@@ -144,7 +135,6 @@ pub const TypeInfo = union(TypeId) {
     Union: Union,
     Fn: Fn,
     BoundFn: Fn,
-    ArgTuple: void,
     Opaque: void,
     Frame: void,
     AnyFrame: AnyFrame,
@@ -174,6 +164,11 @@ pub const TypeInfo = union(TypeId) {
         child: type,
         is_allowzero: bool,
 
+        /// The type of the sentinel is the element type of the pointer, which is
+        /// the value of the `child` field in this struct. However there is no way
+        /// to refer to that type here, so we use `var`.
+        sentinel: var,
+
         /// This data structure is used by the Zig language code generation and
         /// therefore must be kept in sync with the compiler implementation.
         pub const Size = enum {
@@ -189,6 +184,11 @@ pub const TypeInfo = union(TypeId) {
     pub const Array = struct {
         len: comptime_int,
         child: type,
+
+        /// The type of the sentinel is the element type of the array, which is
+        /// the value of the `child` field in this struct. However there is no way
+        /// to refer to that type here, so we use `var`.
+        sentinel: var,
     };
 
     /// This data structure is used by the Zig language code generation and
@@ -205,6 +205,7 @@ pub const TypeInfo = union(TypeId) {
         name: []const u8,
         offset: ?comptime_int,
         field_type: type,
+        default_value: var,
     };
 
     /// This data structure is used by the Zig language code generation and
@@ -253,6 +254,7 @@ pub const TypeInfo = union(TypeId) {
         tag_type: type,
         fields: []EnumField,
         decls: []Declaration,
+        is_exhaustive: bool,
     };
 
     /// This data structure is used by the Zig language code generation and
@@ -270,17 +272,6 @@ pub const TypeInfo = union(TypeId) {
         tag_type: ?type,
         fields: []UnionField,
         decls: []Declaration,
-    };
-
-    /// This data structure is used by the Zig language code generation and
-    /// therefore must be kept in sync with the compiler implementation.
-    pub const CallingConvention = enum {
-        Unspecified,
-        C,
-        Cold,
-        Naked,
-        Stdcall,
-        Async,
     };
 
     /// This data structure is used by the Zig language code generation and
@@ -333,7 +324,6 @@ pub const TypeInfo = union(TypeId) {
             pub const FnDecl = struct {
                 fn_type: type,
                 inline_type: Inline,
-                calling_convention: CallingConvention,
                 is_var_args: bool,
                 is_extern: bool,
                 is_export: bool,
@@ -369,10 +359,81 @@ pub const Endian = enum {
 
 /// This data structure is used by the Zig language code generation and
 /// therefore must be kept in sync with the compiler implementation.
+pub const OutputMode = enum {
+    Exe,
+    Lib,
+    Obj,
+};
+
+/// This data structure is used by the Zig language code generation and
+/// therefore must be kept in sync with the compiler implementation.
+pub const LinkMode = enum {
+    Static,
+    Dynamic,
+};
+
+/// This data structure is used by the Zig language code generation and
+/// therefore must be kept in sync with the compiler implementation.
 pub const Version = struct {
     major: u32,
     minor: u32,
     patch: u32,
+};
+
+/// This data structure is used by the Zig language code generation and
+/// therefore must be kept in sync with the compiler implementation.
+pub const CallOptions = struct {
+    modifier: Modifier = .auto,
+    stack: ?[]align(std.Target.stack_align) u8 = null,
+
+    pub const Modifier = enum {
+        /// Equivalent to function call syntax.
+        auto,
+
+        /// Equivalent to async keyword used with function call syntax.
+        async_kw,
+
+        /// Prevents tail call optimization. This guarantees that the return
+        /// address will point to the callsite, as opposed to the callsite's
+        /// callsite. If the call is otherwise required to be tail-called
+        /// or inlined, a compile error is emitted instead.
+        never_tail,
+
+        /// Guarantees that the call will not be inlined. If the call is
+        /// otherwise required to be inlined, a compile error is emitted instead.
+        never_inline,
+
+        /// Asserts that the function call will not suspend. This allows a
+        /// non-async function to call an async function.
+        no_async,
+
+        /// Guarantees that the call will be generated with tail call optimization.
+        /// If this is not possible, a compile error is emitted instead.
+        always_tail,
+
+        /// Guarantees that the call will inlined at the callsite.
+        /// If this is not possible, a compile error is emitted instead.
+        always_inline,
+
+        /// Evaluates the call at compile-time. If the call cannot be completed at
+        /// compile-time, a compile error is emitted instead.
+        compile_time,
+    };
+};
+
+/// This data structure is used by the Zig language code generation and
+/// therefore must be kept in sync with the compiler implementation.
+pub const ExportOptions = struct {
+    name: []const u8,
+    linkage: GlobalLinkage = .Strong,
+    section: ?[]const u8 = null,
+};
+
+/// This function type is used by the Zig language code generation and
+/// therefore must be kept in sync with the compiler implementation.
+pub const TestFn = struct {
+    name: []const u8,
+    func: fn () anyerror!void,
 };
 
 /// This function type is used by the Zig language code generation and
@@ -387,6 +448,10 @@ pub const panic: PanicFn = if (@hasDecl(root, "panic")) root.panic else default_
 /// therefore must be kept in sync with the compiler implementation.
 pub fn default_panic(msg: []const u8, error_return_trace: ?*StackTrace) noreturn {
     @setCold(true);
+    if (@hasDecl(root, "os") and @hasDecl(root.os, "panic")) {
+        root.os.panic(msg, error_return_trace);
+        unreachable;
+    }
     switch (os) {
         .freestanding => {
             while (true) {
@@ -394,9 +459,8 @@ pub fn default_panic(msg: []const u8, error_return_trace: ?*StackTrace) noreturn
             }
         },
         .wasi => {
-            std.debug.warn("{}", msg);
-            _ = std.os.wasi.proc_raise(std.os.wasi.SIGABRT);
-            unreachable;
+            std.debug.warn("{}", .{msg});
+            std.os.abort();
         },
         .uefi => {
             // TODO look into using the debug info and logging helpful messages
@@ -404,7 +468,7 @@ pub fn default_panic(msg: []const u8, error_return_trace: ?*StackTrace) noreturn
         },
         else => {
             const first_trace_addr = @returnAddress();
-            std.debug.panicExtra(error_return_trace, first_trace_addr, "{}", msg);
+            std.debug.panicExtra(error_return_trace, first_trace_addr, "{}", .{msg});
         },
     }
 }

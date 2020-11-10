@@ -1,10 +1,10 @@
 <!doctype html>
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8">
     <title>Documentation - Zig</title>
     <link rel="icon" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAgklEQVR4AWMYWuD7EllJIM4G4g4g5oIJ/odhOJ8wToOxSTXgNxDHoeiBMfA4+wGShjyYOCkG/IGqWQziEzYAoUAeiF9D5U+DxEg14DRU7jWIT5IBIOdCxf+A+CQZAAoopEB7QJwBCBwHiip8UYmRdrAlDpIMgApwQZNnNii5Dq0MBgCxxycBnwEd+wAAAABJRU5ErkJggg==">
-    <style type="text/css">
+    <style>
       :root {
         font-size: 1em;
         --ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
@@ -270,7 +270,6 @@
       }
       
       .docs td {
-        vertical-align: top;
         margin: 0;
         padding: 0.5em;
         max-width: 27em;
@@ -332,8 +331,7 @@
         border-bottom-color: #c6cbd1;
         border: solid 0.0625em;
         border-radius: 0.1875em;
-        box-shadow-color: #c6cbd1;
-        box-shadow: inset 0 -0.0625em 0;
+        box-shadow: inset 0 -0.0625em 0 #c6cbd1;
         cursor: default;
       }
       
@@ -486,7 +484,11 @@
               doc comments.
               </p>
             </div>
-            <div id="fnDocs" class="hidden"></div>
+            <div id="tldDocs" class="hidden"></div>
+            <div id="sectParams" class="hidden">
+              <h2>Parameters</h2>
+              <div id="listParams"></div>
+            </div>
             <div id="sectFnErrors" class="hidden">
               <h2>Errors</h2>
               <div id="fnErrorsAnyError">

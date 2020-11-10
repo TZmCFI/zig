@@ -16,10 +16,10 @@ pub const PackedIntSlice = @import("packed_int_array.zig").PackedIntSlice;
 pub const PackedIntSliceEndian = @import("packed_int_array.zig").PackedIntSliceEndian;
 pub const PriorityQueue = @import("priority_queue.zig").PriorityQueue;
 pub const Progress = @import("progress.zig").Progress;
+pub const ResetEvent = @import("reset_event.zig").ResetEvent;
 pub const SegmentedList = @import("segmented_list.zig").SegmentedList;
 pub const SinglyLinkedList = @import("linked_list.zig").SinglyLinkedList;
 pub const SpinLock = @import("spinlock.zig").SpinLock;
-pub const StaticallyInitializedMutex = @import("statically_initialized_mutex.zig").StaticallyInitializedMutex;
 pub const StringHashMap = @import("hash_map.zig").StringHashMap;
 pub const TailQueue = @import("linked_list.zig").TailQueue;
 pub const Target = @import("target.zig").Target;
@@ -37,6 +37,7 @@ pub const debug = @import("debug.zig");
 pub const dwarf = @import("dwarf.zig");
 pub const elf = @import("elf.zig");
 pub const event = @import("event.zig");
+pub const fifo = @import("fifo.zig");
 pub const fmt = @import("fmt.zig");
 pub const fs = @import("fs.zig");
 pub const hash = @import("hash.zig");
@@ -64,6 +65,13 @@ pub const time = @import("time.zig");
 pub const unicode = @import("unicode.zig");
 pub const valgrind = @import("valgrind.zig");
 pub const zig = @import("zig.zig");
+pub const start = @import("start.zig");
+
+// This forces the start.zig file to be imported, and the comptime logic inside that
+// file decides whether to export any appropriate start symbols.
+comptime {
+    _ = start;
+}
 
 test "" {
     meta.refAllDecls(@This());

@@ -98,11 +98,8 @@ pub const Progress = struct {
     /// TODO solve https://github.com/ziglang/zig/issues/2765 and then change this
     /// API to return Progress rather than accept it as a parameter.
     pub fn start(self: *Progress, name: []const u8, estimated_total_items: ?usize) !*Node {
-        if (std.io.getStdErr()) |stderr| {
-            self.terminal = if (stderr.supportsAnsiEscapeCodes()) stderr else null;
-        } else |_| {
-            self.terminal = null;
-        }
+        const stderr = std.io.getStdErr();
+        self.terminal = if (stderr.supportsAnsiEscapeCodes()) stderr else null;
         self.root = Node{
             .context = self,
             .parent = null,
@@ -133,11 +130,11 @@ pub const Progress = struct {
         var end: usize = 0;
         if (self.columns_written > 0) {
             // restore cursor position
-            end += (std.fmt.bufPrint(self.output_buffer[end..], "\x1b[{}D", self.columns_written) catch unreachable).len;
+            end += (std.fmt.bufPrint(self.output_buffer[end..], "\x1b[{}D", .{self.columns_written}) catch unreachable).len;
             self.columns_written = 0;
 
             // clear rest of line
-            end += (std.fmt.bufPrint(self.output_buffer[end..], "\x1b[0K") catch unreachable).len;
+            end += (std.fmt.bufPrint(self.output_buffer[end..], "\x1b[0K", .{}) catch unreachable).len;
         }
 
         if (!self.done) {
@@ -145,28 +142,28 @@ pub const Progress = struct {
             var maybe_node: ?*Node = &self.root;
             while (maybe_node) |node| {
                 if (need_ellipse) {
-                    self.bufWrite(&end, "...");
+                    self.bufWrite(&end, "...", .{});
                 }
                 need_ellipse = false;
                 if (node.name.len != 0 or node.estimated_total_items != null) {
                     if (node.name.len != 0) {
-                        self.bufWrite(&end, "{}", node.name);
+                        self.bufWrite(&end, "{}", .{node.name});
                         need_ellipse = true;
                     }
                     if (node.estimated_total_items) |total| {
-                        if (need_ellipse) self.bufWrite(&end, " ");
-                        self.bufWrite(&end, "[{}/{}] ", node.completed_items + 1, total);
+                        if (need_ellipse) self.bufWrite(&end, " ", .{});
+                        self.bufWrite(&end, "[{}/{}] ", .{ node.completed_items + 1, total });
                         need_ellipse = false;
                     } else if (node.completed_items != 0) {
-                        if (need_ellipse) self.bufWrite(&end, " ");
-                        self.bufWrite(&end, "[{}] ", node.completed_items + 1);
+                        if (need_ellipse) self.bufWrite(&end, " ", .{});
+                        self.bufWrite(&end, "[{}] ", .{node.completed_items + 1});
                         need_ellipse = false;
                     }
                 }
                 maybe_node = node.recently_updated_child;
             }
             if (need_ellipse) {
-                self.bufWrite(&end, "...");
+                self.bufWrite(&end, "...", .{});
             }
         }
 
@@ -177,7 +174,7 @@ pub const Progress = struct {
         self.prev_refresh_timestamp = self.timer.read();
     }
 
-    pub fn log(self: *Progress, comptime format: []const u8, args: ...) void {
+    pub fn log(self: *Progress, comptime format: []const u8, args: var) void {
         const file = self.terminal orelse return;
         self.refresh();
         file.outStream().stream.print(format, args) catch {
@@ -187,7 +184,7 @@ pub const Progress = struct {
         self.columns_written = 0;
     }
 
-    fn bufWrite(self: *Progress, end: *usize, comptime format: []const u8, args: ...) void {
+    fn bufWrite(self: *Progress, end: *usize, comptime format: []const u8, args: var) void {
         if (std.fmt.bufPrint(self.output_buffer[end.*..], format, args)) |written| {
             const amt = written.len;
             end.* += amt;

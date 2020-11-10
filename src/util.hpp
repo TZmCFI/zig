@@ -26,6 +26,8 @@
 #define ATTRIBUTE_NORETURN __declspec(noreturn)
 #define ATTRIBUTE_MUST_USE
 
+#define BREAKPOINT __debugbreak()
+
 #else
 
 #define ATTRIBUTE_COLD         __attribute__((cold))
@@ -34,11 +36,20 @@
 #define ATTRIBUTE_NORETURN __attribute__((noreturn))
 #define ATTRIBUTE_MUST_USE __attribute__((warn_unused_result))
 
+#if defined(__MINGW32__) || defined(__MINGW64__)
+#define BREAKPOINT __debugbreak()
+#elif defined(__clang__)
+#define BREAKPOINT __builtin_debugtrap()
+#elif defined(__GNUC__)
+#define BREAKPOINT __builtin_trap()
+#else
+#include <signal.h>
+#define BREAKPOINT raise(SIGTRAP)
+#endif
+
 #endif
 
 #include "softfloat.hpp"
-
-#define BREAKPOINT __asm("int $0x03")
 
 ATTRIBUTE_COLD
 ATTRIBUTE_NORETURN
@@ -165,7 +176,7 @@ static inline void deallocate(T *old, size_t count, const char *name = nullptr) 
 
 template<typename T>
 static inline void destroy(T *old, const char *name = nullptr) {
-    return deallocate(old, 1);
+    return deallocate(old, 1, name);
 }
 
 template <typename T, size_t n>

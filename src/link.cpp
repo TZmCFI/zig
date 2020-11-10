@@ -1647,6 +1647,10 @@ static void construct_linker_job_elf(LinkJob *lj) {
         lj->args.append("--gc-sections");
     }
 
+    if (g->link_eh_frame_hdr) {
+        lj->args.append("--eh-frame-hdr");
+    }
+
     lj->args.append("-m");
     lj->args.append(getLDMOption(g->zig_target));
 
@@ -1792,28 +1796,12 @@ static void construct_linker_job_elf(LinkJob *lj) {
         if (g->libc != nullptr) {
             if (!g->have_dynamic_link) {
                 lj->args.append("--start-group");
-                if (!target_is_android(g->zig_target)) {
-                    lj->args.append("-lgcc");
-                    lj->args.append("-lgcc_eh");
-                }
                 lj->args.append("-lc");
                 lj->args.append("-lm");
                 lj->args.append("--end-group");
             } else {
-                if (!target_is_android(g->zig_target)) {
-                    lj->args.append("-lgcc");
-                    lj->args.append("--as-needed");
-                    lj->args.append("-lgcc_s");
-                    lj->args.append("--no-as-needed");
-                }
                 lj->args.append("-lc");
                 lj->args.append("-lm");
-                if (!target_is_android(g->zig_target)) {
-                    lj->args.append("-lgcc");
-                    lj->args.append("--as-needed");
-                    lj->args.append("-lgcc_s");
-                    lj->args.append("--no-as-needed");
-                }
             }
 
             if (g->zig_target->os == OsFreeBSD) {
@@ -1846,12 +1834,6 @@ static void construct_linker_job_elf(LinkJob *lj) {
 
     if (!g->zig_target->is_native) {
         lj->args.append("--allow-shlib-undefined");
-    }
-
-    if (g->zig_target->os == OsZen) {
-        lj->args.append("-e");
-        lj->args.append("_start");
-        lj->args.append("--image-base=0x10000000");
     }
 }
 
@@ -1980,7 +1962,7 @@ static const char *get_def_lib(CodeGen *parent, const char *name, Buf *def_in_fi
         exit(1);
     }
 
-    Buf *cache_dir = get_stage1_cache_path();
+    Buf *cache_dir = get_global_cache_dir();
     Buf *o_dir = buf_sprintf("%s" OS_SEP CACHE_OUT_SUBDIR, buf_ptr(cache_dir));
     Buf *manifest_dir = buf_sprintf("%s" OS_SEP CACHE_HASH_SUBDIR, buf_ptr(cache_dir));
 

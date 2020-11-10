@@ -45,7 +45,6 @@ message("Configuring zig version ${ZIG_VERSION}")
 
 set(ZIG_STATIC off CACHE BOOL "Attempt to build a static zig executable (not compatible with glibc)")
 set(ZIG_STATIC_LLVM off CACHE BOOL "Prefer linking against static LLVM libraries")
-set(ZIG_SKIP_INSTALL_LIB_FILES off CACHE BOOL "Disable copying lib/ files to install prefix")
 set(ZIG_ENABLE_MEM_PROFILE off CACHE BOOL "Activate memory usage instrumentation")
 
 if(ZIG_STATIC)
@@ -438,13 +437,16 @@ set(ZIG_MAIN_SRC "${CMAKE_SOURCE_DIR}/src/main.cpp")
 # This is our shim which will be replaced by libuserland written in Zig.
 set(ZIG0_SHIM_SRC "${CMAKE_SOURCE_DIR}/src/userland.cpp")
 
+if(ZIG_ENABLE_MEM_PROFILE)
+    set(ZIG_SOURCES_MEM_PROFILE "${CMAKE_SOURCE_DIR}/src/memory_profiling.cpp")
+endif()
+
 set(ZIG_SOURCES
     "${CMAKE_SOURCE_DIR}/src/analyze.cpp"
     "${CMAKE_SOURCE_DIR}/src/ast_render.cpp"
     "${CMAKE_SOURCE_DIR}/src/bigfloat.cpp"
     "${CMAKE_SOURCE_DIR}/src/bigint.cpp"
     "${CMAKE_SOURCE_DIR}/src/buffer.cpp"
-    "${CMAKE_SOURCE_DIR}/src/c_tokenizer.cpp"
     "${CMAKE_SOURCE_DIR}/src/cache_hash.cpp"
     "${CMAKE_SOURCE_DIR}/src/codegen.cpp"
     "${CMAKE_SOURCE_DIR}/src/compiler.cpp"
@@ -456,14 +458,13 @@ set(ZIG_SOURCES
     "${CMAKE_SOURCE_DIR}/src/ir_print.cpp"
     "${CMAKE_SOURCE_DIR}/src/libc_installation.cpp"
     "${CMAKE_SOURCE_DIR}/src/link.cpp"
-    "${CMAKE_SOURCE_DIR}/src/memory_profiling.cpp"
     "${CMAKE_SOURCE_DIR}/src/os.cpp"
     "${CMAKE_SOURCE_DIR}/src/parser.cpp"
     "${CMAKE_SOURCE_DIR}/src/range_set.cpp"
     "${CMAKE_SOURCE_DIR}/src/target.cpp"
     "${CMAKE_SOURCE_DIR}/src/tokenizer.cpp"
-    "${CMAKE_SOURCE_DIR}/src/translate_c.cpp"
     "${CMAKE_SOURCE_DIR}/src/util.cpp"
+    "${ZIG_SOURCES_MEM_PROFILE}"
 )
 set(OPTIMIZED_C_SOURCES
     "${CMAKE_SOURCE_DIR}/src/blake2b.c"
@@ -606,19 +607,26 @@ if("${CMAKE_BUILD_TYPE}" STREQUAL "Debug")
 else()
     set(LIBUSERLAND_RELEASE_MODE "true")
 endif()
-if(ZIG_SKIP_INSTALL_LIB_FILES)
-    set(ZIG_BUILD_INSTALL_STEP "")
-else()
-    set(ZIG_BUILD_INSTALL_STEP "install")
+
+set(BUILD_LIBUSERLAND_ARGS "build"
+    --override-lib-dir "${CMAKE_SOURCE_DIR}/lib"
+    "-Doutput-dir=${CMAKE_BINARY_DIR}"
+    "-Drelease=${LIBUSERLAND_RELEASE_MODE}"
+    "-Dlib-files-only"
+    --prefix "${CMAKE_INSTALL_PREFIX}"
+    libuserland
+)
+
+# When using Visual Studio build system generator we default to libuserland install.
+if(MSVC)
+    set(ZIG_SKIP_INSTALL_LIB_FILES off CACHE BOOL "Disable copying lib/ files to install prefix")
+    if(NOT ZIG_SKIP_INSTALL_LIB_FILES)
+        set(BUILD_LIBUSERLAND_ARGS ${BUILD_LIBUSERLAND_ARGS} install)
+    endif()
 endif()
+
 add_custom_target(zig_build_libuserland ALL
-    COMMAND zig0 build
-        --override-lib-dir "${CMAKE_SOURCE_DIR}/lib"
-        libuserland ${ZIG_BUILD_INSTALL_STEP}
-        "-Doutput-dir=${CMAKE_BINARY_DIR}"
-        "-Drelease=${LIBUSERLAND_RELEASE_MODE}"
-        "-Dlib-files-only"
-        --prefix "${CMAKE_INSTALL_PREFIX}"
+    COMMAND zig0 ${BUILD_LIBUSERLAND_ARGS}
     DEPENDS zig0
     BYPRODUCTS "${LIBUSERLAND}"
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
@@ -636,4 +644,15 @@ elseif(MINGW)
   target_link_libraries(zig ntdll)
 endif()
 add_dependencies(zig zig_build_libuserland)
+
 install(TARGETS zig DESTINATION bin)
+
+# CODE has no effect with Visual Studio build system generator.
+if(NOT MSVC)
+    get_target_property(zig0_BINARY_DIR zig0 BINARY_DIR)
+    install(CODE "set(zig0_EXE \"${zig0_BINARY_DIR}/zig0\")")
+    install(CODE "set(INSTALL_LIBUSERLAND_ARGS \"${BUILD_LIBUSERLAND_ARGS}\" install)")
+    install(CODE "set(BUILD_LIBUSERLAND_ARGS \"${BUILD_LIBUSERLAND_ARGS}\")")
+    install(CODE "set(CMAKE_SOURCE_DIR \"${CMAKE_SOURCE_DIR}\")")
+    install(SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/cmake/install.cmake)
+endif()

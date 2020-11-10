@@ -3,7 +3,7 @@ const BootServices = uefi.tables.BootServices;
 const ConfigurationTable = uefi.tables.ConfigurationTable;
 const Handle = uefi.Handle;
 const RuntimeServices = uefi.tables.RuntimeServices;
-const SimpleTextInputExProtocol = uefi.protocols.SimpleTextInputExProtocol;
+const SimpleTextInputProtocol = uefi.protocols.SimpleTextInputProtocol;
 const SimpleTextOutputProtocol = uefi.protocols.SimpleTextOutputProtocol;
 const TableHeader = uefi.tables.TableHeader;
 
@@ -17,11 +17,12 @@ const TableHeader = uefi.tables.TableHeader;
 /// hdr.crc32 must be recomputed.
 pub const SystemTable = extern struct {
     hdr: TableHeader,
+
     /// A null-terminated string that identifies the vendor that produces the system firmware of the platform.
-    firmware_vendor: [*]u16,
+    firmware_vendor: [*:0]u16,
     firmware_revision: u32,
     console_in_handle: ?Handle,
-    con_in: ?*SimpleTextInputExProtocol,
+    con_in: ?*SimpleTextInputProtocol,
     console_out_handle: ?Handle,
     con_out: ?*SimpleTextOutputProtocol,
     standard_error_handle: ?Handle,

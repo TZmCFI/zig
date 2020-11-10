@@ -1,4 +1,5 @@
 const std = @import("std.zig");
+const mem = std.mem;
 const builtin = std.builtin;
 
 /// TODO Nearly all the functions in this namespace would be
@@ -44,8 +45,8 @@ pub const Target = union(enum) {
         hurd,
         wasi,
         emscripten,
-        zen,
         uefi,
+        other,
     };
 
     pub const Arch = union(enum) {
@@ -124,6 +125,16 @@ pub const Target = union(enum) {
             v5,
             v5te,
             v4t,
+
+            pub fn version(version: Arm32) comptime_int {
+                return switch (version) {
+                    .v8_5a, .v8_4a, .v8_3a, .v8_2a, .v8_1a, .v8, .v8r, .v8m_baseline, .v8m_mainline, .v8_1m_mainline => 8,
+                    .v7, .v7em, .v7m, .v7s, .v7k, .v7ve => 7,
+                    .v6, .v6m, .v6k, .v6t2 => 6,
+                    .v5, .v5te => 5,
+                    .v4t => 4,
+                };
+            }
         };
         pub const Arm64 = enum {
             v8_5a,
@@ -144,6 +155,147 @@ pub const Target = union(enum) {
         pub const Mips = enum {
             r6,
         };
+
+        pub fn isARM(arch: Arch) bool {
+            return switch (arch) {
+                .arm, .armeb => true,
+                else => false,
+            };
+        }
+
+        pub fn isThumb(arch: Arch) bool {
+            return switch (arch) {
+                .thumb, .thumbeb => true,
+                else => false,
+            };
+        }
+
+        pub fn isWasm(arch: Arch) bool {
+            return switch (arch) {
+                .wasm32, .wasm64 => true,
+                else => false,
+            };
+        }
+
+        pub fn isMIPS(arch: Arch) bool {
+            return switch (arch) {
+                .mips, .mipsel, .mips64, .mips64el => true,
+                else => false,
+            };
+        }
+
+        pub fn toElfMachine(arch: Arch) std.elf.EM {
+            return switch (arch) {
+                .avr => ._AVR,
+                .msp430 => ._MSP430,
+                .arc => ._ARC,
+                .arm => ._ARM,
+                .armeb => ._ARM,
+                .hexagon => ._HEXAGON,
+                .le32 => ._NONE,
+                .mips => ._MIPS,
+                .mipsel => ._MIPS_RS3_LE,
+                .powerpc => ._PPC,
+                .r600 => ._NONE,
+                .riscv32 => ._RISCV,
+                .sparc => ._SPARC,
+                .sparcel => ._SPARC,
+                .tce => ._NONE,
+                .tcele => ._NONE,
+                .thumb => ._ARM,
+                .thumbeb => ._ARM,
+                .i386 => ._386,
+                .xcore => ._XCORE,
+                .nvptx => ._NONE,
+                .amdil => ._NONE,
+                .hsail => ._NONE,
+                .spir => ._NONE,
+                .kalimba => ._CSR_KALIMBA,
+                .shave => ._NONE,
+                .lanai => ._LANAI,
+                .wasm32 => ._NONE,
+                .renderscript32 => ._NONE,
+                .aarch64_32 => ._AARCH64,
+                .aarch64 => ._AARCH64,
+                .aarch64_be => ._AARCH64,
+                .mips64 => ._MIPS,
+                .mips64el => ._MIPS_RS3_LE,
+                .powerpc64 => ._PPC64,
+                .powerpc64le => ._PPC64,
+                .riscv64 => ._RISCV,
+                .x86_64 => ._X86_64,
+                .nvptx64 => ._NONE,
+                .le64 => ._NONE,
+                .amdil64 => ._NONE,
+                .hsail64 => ._NONE,
+                .spir64 => ._NONE,
+                .wasm64 => ._NONE,
+                .renderscript64 => ._NONE,
+                .amdgcn => ._NONE,
+                .bpfel => ._BPF,
+                .bpfeb => ._BPF,
+                .sparcv9 => ._SPARCV9,
+                .s390x => ._S390,
+            };
+        }
+
+        pub fn endian(arch: Arch) builtin.Endian {
+            return switch (arch) {
+                .avr,
+                .arm,
+                .aarch64_32,
+                .aarch64,
+                .amdgcn,
+                .amdil,
+                .amdil64,
+                .bpfel,
+                .hexagon,
+                .hsail,
+                .hsail64,
+                .kalimba,
+                .le32,
+                .le64,
+                .mipsel,
+                .mips64el,
+                .msp430,
+                .nvptx,
+                .nvptx64,
+                .sparcel,
+                .tcele,
+                .powerpc64le,
+                .r600,
+                .riscv32,
+                .riscv64,
+                .i386,
+                .x86_64,
+                .wasm32,
+                .wasm64,
+                .xcore,
+                .thumb,
+                .spir,
+                .spir64,
+                .renderscript32,
+                .renderscript64,
+                .shave,
+                => .Little,
+
+                .arc,
+                .armeb,
+                .aarch64_be,
+                .bpfeb,
+                .mips,
+                .mips64,
+                .powerpc,
+                .powerpc64,
+                .thumbeb,
+                .sparc,
+                .sparcv9,
+                .tce,
+                .lanai,
+                .s390x,
+                => .Big,
+            };
+        }
     };
 
     pub const Abi = enum {
@@ -204,41 +356,71 @@ pub const Target = union(enum) {
         },
     };
 
-    pub fn zigTriple(self: Target, allocator: *std.mem.Allocator) ![]u8 {
-        return std.fmt.allocPrint(
-            allocator,
-            "{}{}-{}-{}",
+    pub const stack_align = 16;
+
+    pub fn zigTriple(self: Target, allocator: *mem.Allocator) ![]u8 {
+        return std.fmt.allocPrint(allocator, "{}{}-{}-{}", .{
             @tagName(self.getArch()),
             Target.archSubArchName(self.getArch()),
             @tagName(self.getOs()),
             @tagName(self.getAbi()),
-        );
+        });
     }
 
-    pub fn allocDescription(self: Target, allocator: *std.mem.Allocator) ![]u8 {
+    /// Returned slice must be freed by the caller.
+    pub fn vcpkgTriplet(allocator: *mem.Allocator, target: Target, linkage: std.build.VcpkgLinkage) ![]const u8 {
+        const arch = switch (target.getArch()) {
+            .i386 => "x86",
+            .x86_64 => "x64",
+
+            .arm,
+            .armeb,
+            .thumb,
+            .thumbeb,
+            .aarch64_32,
+            => "arm",
+
+            .aarch64,
+            .aarch64_be,
+            => "arm64",
+
+            else => return error.VcpkgNoSuchArchitecture,
+        };
+
+        const os = switch (target.getOs()) {
+            .windows => "windows",
+            .linux => "linux",
+            .macosx => "macos",
+            else => return error.VcpkgNoSuchOs,
+        };
+
+        if (linkage == .Static) {
+            return try mem.join(allocator, "-", &[_][]const u8{ arch, os, "static" });
+        } else {
+            return try mem.join(allocator, "-", &[_][]const u8{ arch, os });
+        }
+    }
+
+    pub fn allocDescription(self: Target, allocator: *mem.Allocator) ![]u8 {
         // TODO is there anything else worthy of the description that is not
         // already captured in the triple?
         return self.zigTriple(allocator);
     }
 
-    pub fn zigTripleNoSubArch(self: Target, allocator: *std.mem.Allocator) ![]u8 {
-        return std.fmt.allocPrint(
-            allocator,
-            "{}-{}-{}",
+    pub fn zigTripleNoSubArch(self: Target, allocator: *mem.Allocator) ![]u8 {
+        return std.fmt.allocPrint(allocator, "{}-{}-{}", .{
             @tagName(self.getArch()),
             @tagName(self.getOs()),
             @tagName(self.getAbi()),
-        );
+        });
     }
 
-    pub fn linuxTriple(self: Target, allocator: *std.mem.Allocator) ![]u8 {
-        return std.fmt.allocPrint(
-            allocator,
-            "{}-{}-{}",
+    pub fn linuxTriple(self: Target, allocator: *mem.Allocator) ![]u8 {
+        return std.fmt.allocPrint(allocator, "{}-{}-{}", .{
             @tagName(self.getArch()),
             @tagName(self.getOs()),
             @tagName(self.getAbi()),
-        );
+        });
     }
 
     pub fn parse(text: []const u8) !Target {
@@ -282,8 +464,8 @@ pub const Target = union(enum) {
             .mesa3d,
             .contiki,
             .amdpal,
-            .zen,
             .hermit,
+            .other,
             => return .eabi,
             .openbsd,
             .macosx,
@@ -316,7 +498,7 @@ pub const Target = union(enum) {
         inline for (info.Union.fields) |field| {
             if (mem.eql(u8, text, field.name)) {
                 if (field.field_type == void) {
-                    return (Arch)(@field(Arch, field.name));
+                    return @as(Arch, @field(Arch, field.name));
                 } else {
                     const sub_info = @typeInfo(field.field_type);
                     inline for (sub_info.Enum.fields) |sub_field| {
@@ -453,6 +635,13 @@ pub const Target = union(enum) {
         };
     }
 
+    pub fn isMusl(self: Target) bool {
+        return switch (self.getAbi()) {
+            .musl, .musleabi, .musleabihf => true,
+            else => false,
+        };
+    }
+
     pub fn isDarwin(self: Target) bool {
         return switch (self.getOs()) {
             .ios, .macosx, .watchos, .tvos => true,
@@ -570,15 +759,20 @@ pub const Target = union(enum) {
         }
     }
 
+    pub fn supportsNewStackCall(self: Target) bool {
+        return !self.isWasm();
+    }
+
     pub const Executor = union(enum) {
         native,
         qemu: []const u8,
         wine: []const u8,
+        wasmtime: []const u8,
         unavailable,
     };
 
     pub fn getExternalExecutor(self: Target) Executor {
-        if (@TagType(Target)(self) == .Native) return .native;
+        if (@as(@TagType(Target), self) == .Native) return .native;
 
         // If the target OS matches the host OS, we can use QEMU to emulate a foreign architecture.
         if (self.getOs() == builtin.os) {
@@ -608,6 +802,13 @@ pub const Target = union(enum) {
             switch (self.getArchPtrBitWidth()) {
                 32 => return Executor{ .wine = "wine" },
                 64 => return Executor{ .wine = "wine64" },
+                else => return .unavailable,
+            }
+        }
+
+        if (self.getOs() == .wasi) {
+            switch (self.getArchPtrBitWidth()) {
+                32 => return Executor{ .wasmtime = "wasmtime" },
                 else => return .unavailable,
             }
         }
