@@ -11011,6 +11011,11 @@ CodeGen *create_child_codegen(CodeGen *parent_gen, Buf *root_src_path, OutType o
     child_gen->verbose_cc = parent_gen->verbose_cc;
     child_gen->verbose_llvm_cpu_features = parent_gen->verbose_llvm_cpu_features;
     child_gen->llvm_argv = parent_gen->llvm_argv;
+    // Because of the way ThinLTO works, compiler-rt can't be built with LTO.
+    if (strcmp(name, "compiler_rt")) {
+        child_gen->enable_lto = parent_gen->enable_lto;
+    }
+    child_gen->enable_shadow_call_stack = parent_gen->enable_shadow_call_stack;
 
     codegen_set_strip(child_gen, parent_gen->strip_debug_symbols);
     child_gen->want_pic = parent_gen->have_pic ? WantPICEnabled : WantPICDisabled;
