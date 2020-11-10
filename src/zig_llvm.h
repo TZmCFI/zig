@@ -52,6 +52,7 @@ enum ZigLLVM_EmitOutputType {
     ZigLLVM_EmitAssembly,
     ZigLLVM_EmitBinary,
     ZigLLVM_EmitLLVMIr,
+    ZigLLVM_EmitLLVMBc,
 };
 
 ZIG_EXTERN_C bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machine_ref, LLVMModuleRef module_ref,

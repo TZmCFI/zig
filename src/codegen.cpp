@@ -7591,8 +7591,12 @@ static void zig_llvm_emit_output(CodeGen *g) {
     char *err_msg = nullptr;
     switch (g->emit_file_type) {
         case EmitFileTypeBinary:
+            ZigLLVM_EmitOutputType output_type;
+
+            output_type = g->enable_lto ? ZigLLVM_EmitLLVMBc : ZigLLVM_EmitBinary;
+
             if (ZigLLVMTargetMachineEmitToFile(g->target_machine, g->module, buf_ptr(output_path),
-                        ZigLLVM_EmitBinary, &err_msg, g->build_mode == BuildModeDebug, is_small,
+                        output_type, &err_msg, g->build_mode == BuildModeDebug, is_small,
                         g->enable_time_report))
             {
                 zig_panic("unable to write object file %s: %s", buf_ptr(output_path), err_msg);
@@ -8578,6 +8582,7 @@ static Error define_builtin_compile_vars(CodeGen *g) {
     cache_bool(&cache_hash, g->strip_debug_symbols);
     cache_bool(&cache_hash, g->is_test_build);
     cache_bool(&cache_hash, g->is_single_threaded);
+    cache_bool(&cache_hash, g->enable_lto);
     cache_int(&cache_hash, g->zig_target->is_native);
     cache_int(&cache_hash, g->zig_target->arch);
     cache_int(&cache_hash, g->zig_target->sub_arch);
@@ -10136,6 +10141,7 @@ static Error check_cache(CodeGen *g, Buf *manifest_dir, Buf *digest) {
     cache_bool(ch, g->have_stack_probing);
     cache_bool(ch, g->is_dummy_so);
     cache_bool(ch, g->function_sections);
+    cache_bool(ch, g->enable_lto);
     cache_buf_opt(ch, g->mmacosx_version_min);
     cache_buf_opt(ch, g->mios_version_min);
     cache_usize(ch, g->version_major);

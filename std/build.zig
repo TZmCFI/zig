@@ -1446,6 +1446,7 @@ pub const LibExeObjStep = struct {
     name_prefix: []const u8,
     filter: ?[]const u8,
     single_threaded: bool,
+    enable_lto: bool,
 
     root_src: ?[]const u8,
     out_h_filename: []const u8,
@@ -1582,6 +1583,7 @@ pub const LibExeObjStep = struct {
             .output_dir = null,
             .need_system_paths = false,
             .single_threaded = false,
+            .enable_lto = false,
             .installed_path = null,
             .install_step = null,
         };
@@ -2118,6 +2120,10 @@ pub const LibExeObjStep = struct {
 
         if (self.single_threaded) {
             try zig_args.append("--single-threaded");
+        }
+
+        if (self.enable_lto) {
+            try zig_args.append("--lto");
         }
 
         if (self.libc_file) |libc_file| {

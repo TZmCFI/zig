@@ -190,7 +190,7 @@ bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machine_ref, LLVMM
     PMBuilder->VerifyOutput = assertions_on;
     PMBuilder->MergeFunctions = !is_debug;
     PMBuilder->PrepareForLTO = false;
-    PMBuilder->PrepareForThinLTO = false;
+    PMBuilder->PrepareForThinLTO = output_type == ZigLLVM_EmitLLVMBc;
     PMBuilder->PerformThinLTO = false;
 
     TargetLibraryInfoImpl tlii(Triple(module->getTargetTriple()));
@@ -222,7 +222,9 @@ bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machine_ref, LLVMM
 
     // Set output pass.
     TargetMachine::CodeGenFileType ft;
-    if (output_type != ZigLLVM_EmitLLVMIr) {
+    if (output_type == ZigLLVM_EmitLLVMBc) {
+        MPM.add(createWriteThinLTOBitcodePass(dest, nullptr));
+    } else if (output_type != ZigLLVM_EmitLLVMIr) {
         switch (output_type) {
             case ZigLLVM_EmitAssembly:
                 ft = TargetMachine::CGFT_AssemblyFile;
