@@ -1,7 +1,175 @@
 const tests = @import("tests.zig");
-const builtin = @import("builtin");
+const std = @import("std");
+const CrossTarget = std.zig.CrossTarget;
 
 pub fn addCases(cases: *tests.TranslateCContext) void {
+    cases.add("correct semicolon after infixop",
+        \\#define __ferror_unlocked_body(_fp) (((_fp)->_flags & _IO_ERR_SEEN) != 0)
+    , &[_][]const u8{
+        \\pub inline fn __ferror_unlocked_body(_fp: var) @TypeOf(((_fp.*._flags) & _IO_ERR_SEEN) != 0) {
+        \\    return ((_fp.*._flags) & _IO_ERR_SEEN) != 0;
+        \\}
+    });
+
+    cases.add("c booleans are just ints",
+        \\#define FOO(x) ((x >= 0) + (x >= 0))
+        \\#define BAR 1 && 2 > 4
+    , &[_][]const u8{
+        \\pub inline fn FOO(x: var) @TypeOf(@boolToInt(x >= 0) + @boolToInt(x >= 0)) {
+        \\    return @boolToInt(x >= 0) + @boolToInt(x >= 0);
+        \\}
+    ,
+        \\pub const BAR = (1 != 0) and (2 > 4);
+    });
+
+    cases.add("struct with aligned fields",
+        \\struct foo {
+        \\    __attribute__((aligned(1))) short bar;
+        \\};
+    , &[_][]const u8{
+        \\pub const struct_foo = extern struct {
+        \\    bar: c_short align(1),
+        \\};
+    });
+
+    cases.add("structs with VLAs are rejected",
+        \\struct foo { int x; int y[]; };
+        \\struct bar { int x; int y[0]; };
+    , &[_][]const u8{
+        \\pub const struct_foo = @OpaqueType();
+    ,
+        \\pub const struct_bar = @OpaqueType();
+    });
+
+    cases.add("nested loops without blocks",
+        \\void foo() {
+        \\    while (0) while (0) {}
+        \\    for (;;) while (0);
+        \\    for (;;) do {} while (0);
+        \\}
+    , &[_][]const u8{
+        \\pub export fn foo() void {
+        \\    while (@as(c_int, 0) != 0) while (@as(c_int, 0) != 0) {};
+        \\    while (true) while (@as(c_int, 0) != 0) {};
+        \\    while (true) while (true) {
+        \\        if (!(@as(c_int, 0) != 0)) break;
+        \\    };
+        \\}
+    });
+
+    cases.add("macro comma operator",
+        \\#define foo (foo, bar)
+        \\#define bar(x) (&x, +3, 4 == 4, 5 * 6, baz(1, 2), 2 % 2, baz(1,2))
+    , &[_][]const u8{
+        \\pub const foo = blk: {
+        \\    _ = foo;
+        \\    break :blk bar;
+        \\};
+    ,
+        \\pub inline fn bar(x: var) @TypeOf(baz(1, 2)) {
+        \\    return blk: {
+        \\        _ = &x;
+        \\        _ = 3;
+        \\        _ = 4 == 4;
+        \\        _ = 5 * 6;
+        \\        _ = baz(1, 2);
+        \\        _ = 2 % 2;
+        \\        break :blk baz(1, 2);
+        \\    };
+        \\}
+    });
+
+    cases.add("macro keyword define",
+        \\#define foo 1
+        \\#define inline 2
+    , &[_][]const u8{
+        \\pub const foo = 1;
+    ,
+        \\pub const @"inline" = 2;
+    });
+
+    cases.add("macro line continuation",
+        \\#define FOO -\
+        \\BAR
+    , &[_][]const u8{
+        \\pub const FOO = -BAR;
+    });
+
+    cases.add("struct with atomic field",
+        \\struct arcan_shmif_cont {
+        \\        struct arcan_shmif_page* addr;
+        \\};
+        \\struct arcan_shmif_page {
+        \\        volatile _Atomic int abufused[12];
+        \\};
+    , &[_][]const u8{
+        \\pub const struct_arcan_shmif_page = //
+    ,
+        \\warning: unsupported type: 'Atomic'
+        \\    @OpaqueType(); // 
+    ,
+        \\ warning: struct demoted to opaque type - unable to translate type of field abufused
+    , // TODO should be `addr: *struct_arcan_shmif_page`
+        \\pub const struct_arcan_shmif_cont = extern struct {
+        \\    addr: [*c]struct_arcan_shmif_page,
+        \\};
+    });
+
+    cases.add("function prototype translated as optional",
+        \\typedef void (*fnptr_ty)(void);
+        \\typedef __attribute__((cdecl)) void (*fnptr_attr_ty)(void);
+        \\struct foo {
+        \\    __attribute__((cdecl)) void (*foo)(void);
+        \\    void (*bar)(void);
+        \\    fnptr_ty baz;
+        \\    fnptr_attr_ty qux;
+        \\};
+    , &[_][]const u8{
+        \\pub const fnptr_ty = ?fn () callconv(.C) void;
+        \\pub const fnptr_attr_ty = ?fn () callconv(.C) void;
+        \\pub const struct_foo = extern struct {
+        \\    foo: ?fn () callconv(.C) void,
+        \\    bar: ?fn () callconv(.C) void,
+        \\    baz: fnptr_ty,
+        \\    qux: fnptr_attr_ty,
+        \\};
+    });
+
+    cases.add("function prototype with parenthesis",
+        \\void (f0) (void *L);
+        \\void ((f1)) (void *L);
+        \\void (((f2))) (void *L);
+    , &[_][]const u8{
+        \\pub extern fn f0(L: ?*c_void) void;
+        \\pub extern fn f1(L: ?*c_void) void;
+        \\pub extern fn f2(L: ?*c_void) void;
+    });
+
+    cases.add("array initializer w/ typedef",
+        \\typedef unsigned char uuid_t[16];
+        \\static const uuid_t UUID_NULL __attribute__ ((unused)) = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+    , &[_][]const u8{
+        \\pub const uuid_t = [16]u8;
+        \\pub const UUID_NULL: uuid_t = [16]u8{
+        \\    @bitCast(u8, @truncate(i8, @as(c_int, 0))),
+        \\    @bitCast(u8, @truncate(i8, @as(c_int, 0))),
+        \\    @bitCast(u8, @truncate(i8, @as(c_int, 0))),
+        \\    @bitCast(u8, @truncate(i8, @as(c_int, 0))),
+        \\    @bitCast(u8, @truncate(i8, @as(c_int, 0))),
+        \\    @bitCast(u8, @truncate(i8, @as(c_int, 0))),
+        \\    @bitCast(u8, @truncate(i8, @as(c_int, 0))),
+        \\    @bitCast(u8, @truncate(i8, @as(c_int, 0))),
+        \\    @bitCast(u8, @truncate(i8, @as(c_int, 0))),
+        \\    @bitCast(u8, @truncate(i8, @as(c_int, 0))),
+        \\    @bitCast(u8, @truncate(i8, @as(c_int, 0))),
+        \\    @bitCast(u8, @truncate(i8, @as(c_int, 0))),
+        \\    @bitCast(u8, @truncate(i8, @as(c_int, 0))),
+        \\    @bitCast(u8, @truncate(i8, @as(c_int, 0))),
+        \\    @bitCast(u8, @truncate(i8, @as(c_int, 0))),
+        \\    @bitCast(u8, @truncate(i8, @as(c_int, 0))),
+        \\};
+    });
+
     cases.add("empty declaration",
         \\;
     , &[_][]const u8{""});
@@ -51,7 +219,7 @@ pub fn addCases(cases: *tests.TranslateCContext) void {
         \\    .x = @as(c_int, 1),
         \\};
         \\pub export var ub: union_unnamed_1 = union_unnamed_1{
-        \\    .c = .{
+        \\    .c = [4]u8{
         \\        @bitCast(u8, @truncate(i8, @as(c_int, 'a'))),
         \\        @bitCast(u8, @truncate(i8, @as(c_int, 'b'))),
         \\        @bitCast(u8, @truncate(i8, @as(c_int, 'b'))),
@@ -223,10 +391,11 @@ pub fn addCases(cases: *tests.TranslateCContext) void {
     cases.add("variables",
         \\extern int extern_var;
         \\static const int int_var = 13;
+        \\int foo;
     , &[_][]const u8{
         \\pub extern var extern_var: c_int;
-    ,
         \\pub const int_var: c_int = 13;
+        \\pub export var foo: c_int = undefined;
     });
 
     cases.add("const ptr initializer",
@@ -562,6 +731,32 @@ pub fn addCases(cases: *tests.TranslateCContext) void {
         },
     );
 
+    cases.add("float suffixes",
+        \\#define foo 3.14f
+        \\#define bar 16.e-2l
+        \\#define FOO 0.12345
+        \\#define BAR .12345
+    , &[_][]const u8{
+        "pub const foo = @as(f32, 3.14);",
+        "pub const bar = @as(c_longdouble, 16.e-2);",
+        "pub const FOO = 0.12345;",
+        "pub const BAR = 0.12345;",
+    });
+
+    cases.add("comments",
+        \\#define foo 1 //foo
+        \\#define bar /* bar */ 2
+    , &[_][]const u8{
+        "pub const foo = 1;",
+        "pub const bar = 2;",
+    });
+
+    cases.add("string prefix",
+        \\#define foo L"hello"
+    , &[_][]const u8{
+        "pub const foo = \"hello\";",
+    });
+
     cases.add("null statements",
         \\void foo(void) {
         \\    ;;;;;
@@ -576,7 +771,7 @@ pub fn addCases(cases: *tests.TranslateCContext) void {
         \\}
     });
 
-    if (builtin.os != builtin.Os.windows) {
+    if (std.Target.current.os.tag != .windows) {
         // Windows treats this as an enum with type c_int
         cases.add("big negative enum init values when C ABI supports long long enums",
             \\enum EnumWithInits {
@@ -975,7 +1170,7 @@ pub fn addCases(cases: *tests.TranslateCContext) void {
         \\}
     });
 
-    if (builtin.os != builtin.Os.windows) {
+    if (std.Target.current.os.tag != .windows) {
         // sysv_abi not currently supported on windows
         cases.add("Macro qualified functions",
             \\void __attribute__((sysv_abi)) foo(void);
@@ -1004,8 +1199,10 @@ pub fn addCases(cases: *tests.TranslateCContext) void {
         \\pub const fn1 = ?fn (u8) callconv(.C) void;
     });
 
-    cases.addWithTarget("Calling convention", tests.Target{
-        .Cross = .{ .os = .linux, .arch = .i386, .abi = .none },
+    cases.addWithTarget("Calling convention", .{
+        .cpu_arch = .i386,
+        .os_tag = .linux,
+        .abi = .none,
     },
         \\void __attribute__((fastcall)) foo1(float *a);
         \\void __attribute__((stdcall)) foo2(float *a);
@@ -1020,9 +1217,10 @@ pub fn addCases(cases: *tests.TranslateCContext) void {
         \\pub fn foo5(a: [*c]f32) callconv(.Thiscall) void;
     });
 
-    cases.addWithTarget("Calling convention", tests.Target{
-        .Cross = .{ .os = .linux, .arch = .{ .arm = .v8_5a }, .abi = .none },
-    },
+    cases.addWithTarget("Calling convention", CrossTarget.parse(.{
+        .arch_os_abi = "arm-linux-none",
+        .cpu_features = "generic+v8_5a",
+    }) catch unreachable,
         \\void __attribute__((pcs("aapcs"))) foo1(float *a);
         \\void __attribute__((pcs("aapcs-vfp"))) foo2(float *a);
     , &[_][]const u8{
@@ -1030,9 +1228,10 @@ pub fn addCases(cases: *tests.TranslateCContext) void {
         \\pub fn foo2(a: [*c]f32) callconv(.AAPCSVFP) void;
     });
 
-    cases.addWithTarget("Calling convention", tests.Target{
-        .Cross = .{ .os = .linux, .arch = .{ .aarch64 = .v8_5a }, .abi = .none },
-    },
+    cases.addWithTarget("Calling convention", CrossTarget.parse(.{
+        .arch_os_abi = "aarch64-linux-none",
+        .cpu_features = "generic+v8_5a",
+    }) catch unreachable,
         \\void __attribute__((aarch64_vector_pcs)) foo1(float *a);
     , &[_][]const u8{
         \\pub fn foo1(a: [*c]f32) callconv(.Vectorcall) void;
@@ -1067,12 +1266,12 @@ pub fn addCases(cases: *tests.TranslateCContext) void {
         \\}
     , &[_][]const u8{
         \\pub fn foo() callconv(.C) void {
-        \\    var arr: [10]u8 = .{
+        \\    var arr: [10]u8 = [1]u8{
         \\        @bitCast(u8, @truncate(i8, @as(c_int, 1))),
-        \\    } ++ .{0} ** 9;
-        \\    var arr1: [10][*c]u8 = .{
+        \\    } ++ [1]u8{0} ** 9;
+        \\    var arr1: [10][*c]u8 = [1][*c]u8{
         \\        null,
-        \\    } ++ .{null} ** 9;
+        \\    } ++ [1][*c]u8{null} ** 9;
         \\}
     });
 
@@ -1259,17 +1458,22 @@ pub fn addCases(cases: *tests.TranslateCContext) void {
     cases.add("macro pointer cast",
         \\#define NRF_GPIO ((NRF_GPIO_Type *) NRF_GPIO_BASE)
     , &[_][]const u8{
-        \\pub const NRF_GPIO = if (@typeId(@TypeOf(NRF_GPIO_BASE)) == .Pointer) @ptrCast([*c]NRF_GPIO_Type, NRF_GPIO_BASE) else if (@typeId(@TypeOf(NRF_GPIO_BASE)) == .Int) @intToPtr([*c]NRF_GPIO_Type, NRF_GPIO_BASE) else @as([*c]NRF_GPIO_Type, NRF_GPIO_BASE);
+        \\pub const NRF_GPIO = (if (@typeInfo(@TypeOf(NRF_GPIO_BASE)) == .Pointer) @ptrCast([*c]NRF_GPIO_Type, @alignCast(@alignOf([*c]NRF_GPIO_Type.Child), NRF_GPIO_BASE)) else if (@typeInfo(@TypeOf(NRF_GPIO_BASE)) == .Int and @typeInfo([*c]NRF_GPIO_Type) == .Pointer) @intToPtr([*c]NRF_GPIO_Type, NRF_GPIO_BASE) else @as([*c]NRF_GPIO_Type, NRF_GPIO_BASE));
     });
 
     cases.add("basic macro function",
         \\extern int c;
         \\#define BASIC(c) (c*2)
+        \\#define FOO(L,b) (L + b)
     , &[_][]const u8{
         \\pub extern var c: c_int;
     ,
         \\pub inline fn BASIC(c_1: var) @TypeOf(c_1 * 2) {
         \\    return c_1 * 2;
+        \\}
+    ,
+        \\pub inline fn FOO(L: var, b: var) @TypeOf(L + b) {
+        \\    return L + b;
         \\}
     });
 
@@ -1426,7 +1630,7 @@ pub fn addCases(cases: *tests.TranslateCContext) void {
     cases.add("shadowing primitive types",
         \\unsigned anyerror = 2;
     , &[_][]const u8{
-        \\pub export var _anyerror: c_uint = @bitCast(c_uint, @as(c_int, 2));
+        \\pub export var anyerror_1: c_uint = @bitCast(c_uint, @as(c_int, 2));
     });
 
     cases.add("floats",
@@ -1496,7 +1700,7 @@ pub fn addCases(cases: *tests.TranslateCContext) void {
         \\}
     });
 
-    if (builtin.os != .windows) {
+    if (std.Target.current.os.tag != .windows) {
         // When clang uses the <arch>-windows-none triple it behaves as MSVC and
         // interprets the inner `struct Bar` as an anonymous structure
         cases.add("type referenced struct",
@@ -1519,7 +1723,7 @@ pub fn addCases(cases: *tests.TranslateCContext) void {
     cases.add("undefined array global",
         \\int array[100] = {};
     , &[_][]const u8{
-        \\pub export var array: [100]c_int = .{0} ** 100;
+        \\pub export var array: [100]c_int = [1]c_int{0} ** 100;
     });
 
     cases.add("restrict -> noalias",
@@ -1853,7 +2057,7 @@ pub fn addCases(cases: *tests.TranslateCContext) void {
         \\    return array[index];
         \\}
     , &[_][]const u8{
-        \\pub export var array: [100]c_int = .{0} ** 100;
+        \\pub export var array: [100]c_int = [1]c_int{0} ** 100;
         \\pub export fn foo(arg_index: c_int) c_int {
         \\    var index = arg_index;
         \\    return array[@intCast(c_uint, index)];
@@ -2171,6 +2375,7 @@ pub fn addCases(cases: *tests.TranslateCContext) void {
     cases.add("compound assignment operators",
         \\void foo(void) {
         \\    int a = 0;
+        \\    unsigned b = 0;
         \\    a += (a += 1);
         \\    a -= (a -= 1);
         \\    a *= (a *= 1);
@@ -2179,10 +2384,15 @@ pub fn addCases(cases: *tests.TranslateCContext) void {
         \\    a ^= (a ^= 1);
         \\    a >>= (a >>= 1);
         \\    a <<= (a <<= 1);
+        \\    a /= (a /= 1);
+        \\    a %= (a %= 1);
+        \\    b /= (b /= 1);
+        \\    b %= (b %= 1);
         \\}
     , &[_][]const u8{
         \\pub export fn foo() void {
         \\    var a: c_int = 0;
+        \\    var b: c_uint = @bitCast(c_uint, @as(c_int, 0));
         \\    a += (blk: {
         \\        const ref = &a;
         \\        ref.* = ref.* + @as(c_int, 1);
@@ -2223,6 +2433,26 @@ pub fn addCases(cases: *tests.TranslateCContext) void {
         \\        ref.* = ref.* << @intCast(@import("std").math.Log2Int(c_int), @as(c_int, 1));
         \\        break :blk ref.*;
         \\    }));
+        \\    a = @divTrunc(a, (blk: {
+        \\        const ref = &a;
+        \\        ref.* = @divTrunc(ref.*, @as(c_int, 1));
+        \\        break :blk ref.*;
+        \\    }));
+        \\    a = @rem(a, (blk: {
+        \\        const ref = &a;
+        \\        ref.* = @rem(ref.*, @as(c_int, 1));
+        \\        break :blk ref.*;
+        \\    }));
+        \\    b /= (blk: {
+        \\        const ref = &b;
+        \\        ref.* = ref.* / @bitCast(c_uint, @as(c_int, 1));
+        \\        break :blk ref.*;
+        \\    });
+        \\    b %= (blk: {
+        \\        const ref = &b;
+        \\        ref.* = ref.* % @bitCast(c_uint, @as(c_int, 1));
+        \\        break :blk ref.*;
+        \\    });
         \\}
     });
 
@@ -2436,10 +2666,13 @@ pub fn addCases(cases: *tests.TranslateCContext) void {
 
     cases.add("macro cast",
         \\#define FOO(bar) baz((void *)(baz))
+        \\#define BAR (void*) a
     , &[_][]const u8{
-        \\pub inline fn FOO(bar: var) @TypeOf(baz(if (@typeId(@TypeOf(baz)) == .Pointer) @ptrCast([*c]void, baz) else if (@typeId(@TypeOf(baz)) == .Int) @intToPtr([*c]void, baz) else @as([*c]void, baz))) {
-        \\    return baz(if (@typeId(@TypeOf(baz)) == .Pointer) @ptrCast([*c]void, baz) else if (@typeId(@TypeOf(baz)) == .Int) @intToPtr([*c]void, baz) else @as([*c]void, baz));
+        \\pub inline fn FOO(bar: var) @TypeOf(baz((if (@typeInfo(@TypeOf(baz)) == .Pointer) @ptrCast(?*c_void, @alignCast(@alignOf(?*c_void.Child), baz)) else if (@typeInfo(@TypeOf(baz)) == .Int and @typeInfo(?*c_void) == .Pointer) @intToPtr(?*c_void, baz) else @as(?*c_void, baz)))) {
+        \\    return baz((if (@typeInfo(@TypeOf(baz)) == .Pointer) @ptrCast(?*c_void, @alignCast(@alignOf(?*c_void.Child), baz)) else if (@typeInfo(@TypeOf(baz)) == .Int and @typeInfo(?*c_void) == .Pointer) @intToPtr(?*c_void, baz) else @as(?*c_void, baz)));
         \\}
+    ,
+        \\pub const BAR = (if (@typeInfo(@TypeOf(a)) == .Pointer) @ptrCast(?*c_void, @alignCast(@alignOf(?*c_void.Child), a)) else if (@typeInfo(@TypeOf(a)) == .Int and @typeInfo(?*c_void) == .Pointer) @intToPtr(?*c_void, a) else @as(?*c_void, a));
     });
 
     cases.add("macro conditional operator",
@@ -2590,4 +2823,129 @@ pub fn addCases(cases: *tests.TranslateCContext) void {
         \\    return foo((@intCast(c_int, @bitCast(i1, @intCast(u1, @boolToInt(c)))) != @intCast(c_int, @bitCast(i1, @intCast(u1, @boolToInt(b))))));
         \\}
     });
+
+    cases.add("Don't make const parameters mutable",
+        \\int max(const int x, int y) {
+        \\    return (x > y) ? x : y;
+        \\}
+    , &[_][]const u8{
+        \\pub export fn max(x: c_int, arg_y: c_int) c_int {
+        \\    var y = arg_y;
+        \\    return if (x > y) x else y;
+        \\}
+    });
+
+    cases.add("string concatenation in macros",
+        \\#define FOO "hello"
+        \\#define BAR FOO " world"
+        \\#define BAZ "oh, " FOO
+    , &[_][]const u8{
+        \\pub const FOO = "hello";
+    ,
+        \\pub const BAR = FOO ++ " world";
+    ,
+        \\pub const BAZ = "oh, " ++ FOO;
+    });
+
+    cases.add("string concatenation in macros: two defines",
+        \\#define FOO "hello"
+        \\#define BAZ " world"
+        \\#define BAR FOO BAZ
+    , &[_][]const u8{
+        \\pub const FOO = "hello";
+    ,
+        \\pub const BAZ = " world";
+    ,
+        \\pub const BAR = FOO ++ BAZ;
+    });
+
+    cases.add("string concatenation in macros: two strings",
+        \\#define FOO "a" "b"
+        \\#define BAR FOO "c"
+    , &[_][]const u8{
+        \\pub const FOO = "a" ++ "b";
+    ,
+        \\pub const BAR = FOO ++ "c";
+    });
+
+    cases.add("string concatenation in macros: three strings",
+        \\#define FOO "a" "b" "c"
+    , &[_][]const u8{
+        \\pub const FOO = "a" ++ ("b" ++ "c");
+    });
+
+    cases.add("multibyte character literals",
+        \\#define FOO 'abcd'
+    , &[_][]const u8{
+        \\pub const FOO = 0x61626364;
+    });
+
+    cases.add("Make sure casts are grouped",
+        \\typedef struct
+        \\{
+        \\    int i;
+        \\}
+        \\*_XPrivDisplay;
+        \\typedef struct _XDisplay Display;
+        \\#define DefaultScreen(dpy) (((_XPrivDisplay)(dpy))->default_screen)
+        \\
+    , &[_][]const u8{
+        \\pub inline fn DefaultScreen(dpy: var) @TypeOf((if (@typeInfo(@TypeOf(dpy)) == .Pointer) @ptrCast(_XPrivDisplay, @alignCast(@alignOf(_XPrivDisplay.Child), dpy)) else if (@typeInfo(@TypeOf(dpy)) == .Int and @typeInfo(_XPrivDisplay) == .Pointer) @intToPtr(_XPrivDisplay, dpy) else @as(_XPrivDisplay, dpy)).*.default_screen) {
+        \\    return (if (@typeInfo(@TypeOf(dpy)) == .Pointer) @ptrCast(_XPrivDisplay, @alignCast(@alignOf(_XPrivDisplay.Child), dpy)) else if (@typeInfo(@TypeOf(dpy)) == .Int and @typeInfo(_XPrivDisplay) == .Pointer) @intToPtr(_XPrivDisplay, dpy) else @as(_XPrivDisplay, dpy)).*.default_screen;
+        \\}
+    });
+
+    cases.add("macro integer literal casts",
+        \\#define NULL ((void*)0)
+        \\#define FOO ((int)0x8000)
+    , &[_][]const u8{
+        \\pub const NULL = (if (@typeInfo(?*c_void) == .Pointer) @intToPtr(?*c_void, 0) else @as(?*c_void, 0));
+    ,
+        \\pub const FOO = (if (@typeInfo(c_int) == .Pointer) @intToPtr(c_int, 0x8000) else @as(c_int, 0x8000));
+    });
+
+    if (std.Target.current.abi == .msvc) {
+        cases.add("nameless struct fields",
+            \\typedef struct NAMED
+            \\{
+            \\    long name;
+            \\} NAMED;
+            \\
+            \\typedef struct ONENAMEWITHSTRUCT
+            \\{
+            \\    NAMED;
+            \\    long b;
+            \\} ONENAMEWITHSTRUCT;
+        , &[_][]const u8{
+            \\pub const struct_NAMED = extern struct {
+            \\    name: c_long,
+            \\};
+            \\pub const NAMED = struct_NAMED;
+            \\pub const struct_ONENAMEWITHSTRUCT = extern struct {
+            \\    unnamed_1: struct_NAMED,
+            \\    b: c_long,
+            \\};
+        });
+    } else {
+        cases.add("nameless struct fields",
+            \\typedef struct NAMED
+            \\{
+            \\    long name;
+            \\} NAMED;
+            \\
+            \\typedef struct ONENAMEWITHSTRUCT
+            \\{
+            \\    NAMED;
+            \\    long b;
+            \\} ONENAMEWITHSTRUCT;
+        , &[_][]const u8{
+            \\pub const struct_NAMED = extern struct {
+            \\    name: c_long,
+            \\};
+            \\pub const NAMED = struct_NAMED;
+            \\pub const struct_ONENAMEWITHSTRUCT = extern struct {
+            \\    b: c_long,
+            \\};
+        });
+    }
 }

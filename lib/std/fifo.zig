@@ -101,7 +101,7 @@ pub fn LinearFifo(
                 }
             }
             { // set unused area to undefined
-                const unused = @sliceToBytes(self.buf[self.count..]);
+                const unused = mem.sliceAsBytes(self.buf[self.count..]);
                 @memset(unused.ptr, undefined, unused.len);
             }
         }
@@ -160,18 +160,18 @@ pub fn LinearFifo(
             return self.readableSliceMut(offset);
         }
 
-        /// Discard first `count` bytes of readable data
+        /// Discard first `count` items in the fifo
         pub fn discard(self: *Self, count: usize) void {
             assert(count <= self.count);
             { // set old range to undefined. Note: may be wrapped around
                 const slice = self.readableSliceMut(0);
                 if (slice.len >= count) {
-                    const unused = @sliceToBytes(slice[0..count]);
+                    const unused = mem.sliceAsBytes(slice[0..count]);
                     @memset(unused.ptr, undefined, unused.len);
                 } else {
-                    const unused = @sliceToBytes(slice[0..]);
+                    const unused = mem.sliceAsBytes(slice[0..]);
                     @memset(unused.ptr, undefined, unused.len);
-                    const unused2 = @sliceToBytes(self.readableSliceMut(slice.len)[0 .. count - slice.len]);
+                    const unused2 = mem.sliceAsBytes(self.readableSliceMut(slice.len)[0 .. count - slice.len]);
                     @memset(unused2.ptr, undefined, unused2.len);
                 }
             }
@@ -199,7 +199,7 @@ pub fn LinearFifo(
             return c;
         }
 
-        /// Read data from the fifo into `dst`, returns number of bytes copied.
+        /// Read data from the fifo into `dst`, returns number of items copied.
         pub fn read(self: *Self, dst: []T) usize {
             var dst_left = dst;
 
@@ -215,7 +215,17 @@ pub fn LinearFifo(
             return dst.len - dst_left.len;
         }
 
-        /// Returns number of bytes available in fifo
+        /// Same as `read` except it returns an error union
+        /// The purpose of this function existing is to match `std.io.InStream` API.
+        fn readFn(self: *Self, dest: []u8) error{}!usize {
+            return self.read(dest);
+        }
+
+        pub fn inStream(self: *Self) std.io.InStream(*Self, error{}, readFn) {
+            return .{ .context = self };
+        }
+
+        /// Returns number of items available in fifo
         pub fn writableLength(self: Self) usize {
             return self.buf.len - self.count;
         }
@@ -233,9 +243,9 @@ pub fn LinearFifo(
             }
         }
 
-        /// Returns a writable buffer of at least `size` bytes, allocating memory as needed.
+        /// Returns a writable buffer of at least `size` items, allocating memory as needed.
         /// Use `fifo.update` once you've written data to it.
-        pub fn writeableWithSize(self: *Self, size: usize) ![]T {
+        pub fn writableWithSize(self: *Self, size: usize) ![]T {
             try self.ensureUnusedCapacity(size);
 
             // try to avoid realigning buffer
@@ -247,7 +257,7 @@ pub fn LinearFifo(
             return slice;
         }
 
-        /// Update the tail location of the buffer (usually follows use of writable/writeableWithSize)
+        /// Update the tail location of the buffer (usually follows use of writable/writableWithSize)
         pub fn update(self: *Self, count: usize) void {
             assert(self.count + count <= self.buf.len);
             self.count += count;
@@ -279,7 +289,7 @@ pub fn LinearFifo(
             } else {
                 tail %= self.buf.len;
             }
-            self.buf[tail] = byte;
+            self.buf[tail] = item;
             self.update(1);
         }
 
@@ -291,14 +301,16 @@ pub fn LinearFifo(
             return self.writeAssumeCapacity(src);
         }
 
-        pub usingnamespace if (T == u8)
-            struct {
-                pub fn print(self: *Self, comptime format: []const u8, args: var) !void {
-                    return std.fmt.format(self, error{OutOfMemory}, Self.write, format, args);
-                }
-            }
-        else
-            struct {};
+        /// Same as `write` except it returns the number of bytes written, which is always the same
+        /// as `bytes.len`. The purpose of this function existing is to match `std.io.OutStream` API.
+        fn appendWrite(self: *Self, bytes: []const u8) error{OutOfMemory}!usize {
+            try self.write(bytes);
+            return bytes.len;
+        }
+
+        pub fn outStream(self: *Self) std.io.OutStream(*Self, error{OutOfMemory}, appendWrite) {
+            return .{ .context = self };
+        }
 
         /// Make `count` items available before the current read location
         fn rewind(self: *Self, count: usize) void {
@@ -347,7 +359,7 @@ pub fn LinearFifo(
 }
 
 test "LinearFifo(u8, .Dynamic)" {
-    var fifo = LinearFifo(u8, .Dynamic).init(debug.global_allocator);
+    var fifo = LinearFifo(u8, .Dynamic).init(testing.allocator);
     defer fifo.deinit();
 
     try fifo.write("HELLO");
@@ -385,7 +397,7 @@ test "LinearFifo(u8, .Dynamic)" {
     }
 
     {
-        const buf = try fifo.writeableWithSize(12);
+        const buf = try fifo.writableWithSize(12);
         testing.expectEqual(@as(usize, 12), buf.len);
         var i: u8 = 0;
         while (i < 10) : (i += 1) {
@@ -407,10 +419,19 @@ test "LinearFifo(u8, .Dynamic)" {
     fifo.shrink(0);
 
     {
-        try fifo.print("{}, {}!", .{ "Hello", "World" });
+        try fifo.outStream().print("{}, {}!", .{ "Hello", "World" });
         var result: [30]u8 = undefined;
         testing.expectEqualSlices(u8, "Hello, World!", result[0..fifo.read(&result)]);
         testing.expectEqual(@as(usize, 0), fifo.readableLength());
+    }
+
+    {
+        try fifo.outStream().writeAll("This is a test");
+        var result: [30]u8 = undefined;
+        testing.expectEqualSlices(u8, "This", (try fifo.inStream().readUntilDelimiterOrEof(&result, ' ')).?);
+        testing.expectEqualSlices(u8, "is", (try fifo.inStream().readUntilDelimiterOrEof(&result, ' ')).?);
+        testing.expectEqualSlices(u8, "a", (try fifo.inStream().readUntilDelimiterOrEof(&result, ' ')).?);
+        testing.expectEqualSlices(u8, "test", (try fifo.inStream().readUntilDelimiterOrEof(&result, ' ')).?);
     }
 }
 
@@ -422,7 +443,7 @@ test "LinearFifo" {
             var fifo = switch (bt) {
                 .Static => FifoType.init(),
                 .Slice => FifoType.init(buf[0..]),
-                .Dynamic => FifoType.init(debug.global_allocator),
+                .Dynamic => FifoType.init(testing.allocator),
             };
             defer fifo.deinit();
 
@@ -435,6 +456,20 @@ test "LinearFifo" {
                 testing.expectEqual(@as(T, 1), try fifo.readItem());
                 testing.expectEqual(@as(T, 0), try fifo.readItem());
                 testing.expectEqual(@as(T, 1), try fifo.readItem());
+                testing.expectEqual(@as(usize, 0), fifo.readableLength());
+            }
+
+            {
+                try fifo.writeItem(1);
+                try fifo.writeItem(1);
+                try fifo.writeItem(1);
+                testing.expectEqual(@as(usize, 3), fifo.readableLength());
+            }
+
+            {
+                var readBuf: [3]T = undefined;
+                const n = fifo.read(&readBuf);
+                testing.expectEqual(@as(usize, 3), n); // NOTE: It should be the number of items.
             }
         }
     }

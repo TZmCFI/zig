@@ -7,6 +7,7 @@ const fmt = std.fmt;
 const mem = std.mem;
 const fs = std.fs;
 const warn = std.debug.warn;
+const CrossTarget = std.zig.CrossTarget;
 
 pub const TranslateCContext = struct {
     b: *build.Builder,
@@ -19,7 +20,7 @@ pub const TranslateCContext = struct {
         sources: ArrayList(SourceFile),
         expected_lines: ArrayList([]const u8),
         allow_warnings: bool,
-        target: std.Target = .Native,
+        target: CrossTarget = CrossTarget{},
 
         const SourceFile = struct {
             filename: []const u8,
@@ -75,7 +76,7 @@ pub const TranslateCContext = struct {
     pub fn addWithTarget(
         self: *TranslateCContext,
         name: []const u8,
-        target: std.Target,
+        target: CrossTarget,
         source: []const u8,
         expected_lines: []const []const u8,
     ) void {
@@ -104,20 +105,20 @@ pub const TranslateCContext = struct {
         }
 
         const write_src = b.addWriteFiles();
-        for (case.sources.toSliceConst()) |src_file| {
+        for (case.sources.span()) |src_file| {
             write_src.add(src_file.filename, src_file.source);
         }
 
         const translate_c = b.addTranslateC(.{
             .write_file = .{
                 .step = write_src,
-                .basename = case.sources.toSliceConst()[0].filename,
+                .basename = case.sources.span()[0].filename,
             },
         });
         translate_c.step.name = annotated_case_name;
         translate_c.setTarget(case.target);
 
-        const check_file = translate_c.addCheckFile(case.expected_lines.toSliceConst());
+        const check_file = translate_c.addCheckFile(case.expected_lines.span());
 
         self.step.dependOn(&check_file.step);
     }

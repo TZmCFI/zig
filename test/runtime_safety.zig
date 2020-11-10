@@ -1,6 +1,105 @@
 const tests = @import("tests.zig");
 
 pub fn addCases(cases: *tests.CompareOutputContext) void {
+    {
+        const check_panic_msg =
+            \\pub fn panic(message: []const u8, stack_trace: ?*@import("builtin").StackTrace) noreturn {
+            \\    if (std.mem.eql(u8, message, "index out of bounds")) {
+            \\        std.process.exit(126); // good
+            \\    }
+            \\    std.process.exit(0); // test failed
+            \\}
+        ;
+
+        cases.addRuntimeSafety("slicing operator with sentinel",
+            \\const std = @import("std");
+        ++ check_panic_msg ++
+            \\pub fn main() void {
+            \\    var buf = [4]u8{'a','b','c',0};
+            \\    const slice = buf[0..4 :0];
+            \\}
+        );
+        cases.addRuntimeSafety("slicing operator with sentinel",
+            \\const std = @import("std");
+        ++ check_panic_msg ++
+            \\pub fn main() void {
+            \\    var buf = [4]u8{'a','b','c',0};
+            \\    const slice = buf[0..:0];
+            \\}
+        );
+        cases.addRuntimeSafety("slicing operator with sentinel",
+            \\const std = @import("std");
+        ++ check_panic_msg ++
+            \\pub fn main() void {
+            \\    var buf_zero = [0]u8{};
+            \\    const slice = buf_zero[0..0 :0];
+            \\}
+        );
+        cases.addRuntimeSafety("slicing operator with sentinel",
+            \\const std = @import("std");
+        ++ check_panic_msg ++
+            \\pub fn main() void {
+            \\    var buf_zero = [0]u8{};
+            \\    const slice = buf_zero[0..:0];
+            \\}
+        );
+        cases.addRuntimeSafety("slicing operator with sentinel",
+            \\const std = @import("std");
+        ++ check_panic_msg ++
+            \\pub fn main() void {
+            \\    var buf_sentinel = [2:0]u8{'a','b'};
+            \\    @ptrCast(*[3]u8, &buf_sentinel)[2] = 0;
+            \\    const slice = buf_sentinel[0..3 :0];
+            \\}
+        );
+        cases.addRuntimeSafety("slicing operator with sentinel",
+            \\const std = @import("std");
+        ++ check_panic_msg ++
+            \\pub fn main() void {
+            \\    var buf_slice: []const u8 = &[3]u8{ 'a', 'b', 0 };
+            \\    const slice = buf_slice[0..3 :0];
+            \\}
+        );
+        cases.addRuntimeSafety("slicing operator with sentinel",
+            \\const std = @import("std");
+        ++ check_panic_msg ++
+            \\pub fn main() void {
+            \\    var buf_slice: []const u8 = &[3]u8{ 'a', 'b', 0 };
+            \\    const slice = buf_slice[0.. :0];
+            \\}
+        );
+    }
+
+    cases.addRuntimeSafety("shift left by huge amount",
+        \\const std = @import("std");
+        \\pub fn panic(message: []const u8, stack_trace: ?*@import("builtin").StackTrace) noreturn {
+        \\    if (std.mem.eql(u8, message, "shift amount is greater than the type size")) {
+        \\        std.process.exit(126); // good
+        \\    }
+        \\    std.process.exit(0); // test failed
+        \\}
+        \\pub fn main() void {
+        \\    var x: u24 = 42;
+        \\    var y: u5 = 24;
+        \\    var z = x >> y;
+        \\}
+    );
+
+    cases.addRuntimeSafety("shift right by huge amount",
+        \\const std = @import("std");
+        \\pub fn panic(message: []const u8, stack_trace: ?*@import("builtin").StackTrace) noreturn {
+        \\    if (std.mem.eql(u8, message, "shift amount is greater than the type size")) {
+        \\        std.process.exit(126); // good
+        \\    }
+        \\    std.process.exit(0); // test failed
+        \\}
+        \\pub fn main() void {
+        \\    var x: u24 = 42;
+        \\    var y: u5 = 24;
+        \\    var z = x << y;
+        \\}
+    );
+
     cases.addRuntimeSafety("slice sentinel mismatch - optional pointers",
         \\const std = @import("std");
         \\pub fn panic(message: []const u8, stack_trace: ?*@import("builtin").StackTrace) noreturn {
@@ -39,7 +138,7 @@ pub fn addCases(cases: *tests.CompareOutputContext) void {
         \\}
         \\pub fn main() void {
         \\    var buf: [4]u8 = undefined;
-        \\    const ptr = buf[0..].ptr;
+        \\    const ptr: [*]u8 = &buf;
         \\    const slice = ptr[0..3 :0];
         \\}
     );
@@ -475,6 +574,21 @@ pub fn addCases(cases: *tests.CompareOutputContext) void {
         \\}
     );
 
+    cases.addRuntimeSafety("signed integer division overflow - vectors",
+        \\pub fn panic(message: []const u8, stack_trace: ?*@import("builtin").StackTrace) noreturn {
+        \\    @import("std").os.exit(126);
+        \\}
+        \\pub fn main() !void {
+        \\    var a: @Vector(4, i16) = [_]i16{ 1, 2, -32768, 4 };
+        \\    var b: @Vector(4, i16) = [_]i16{ 1, 2, -1, 4 };
+        \\    const x = div(a, b);
+        \\    if (x[2] == 32767) return error.Whatever;
+        \\}
+        \\fn div(a: @Vector(4, i16), b: @Vector(4, i16)) @Vector(4, i16) {
+        \\    return @divTrunc(a, b);
+        \\}
+    );
+
     cases.addRuntimeSafety("signed shift left overflow",
         \\pub fn panic(message: []const u8, stack_trace: ?*@import("builtin").StackTrace) noreturn {
         \\    @import("std").os.exit(126);
@@ -539,6 +653,20 @@ pub fn addCases(cases: *tests.CompareOutputContext) void {
         \\}
     );
 
+    cases.addRuntimeSafety("integer division by zero - vectors",
+        \\pub fn panic(message: []const u8, stack_trace: ?*@import("builtin").StackTrace) noreturn {
+        \\    @import("std").os.exit(126);
+        \\}
+        \\pub fn main() void {
+        \\    var a: @Vector(4, i32) = [4]i32{111, 222, 333, 444};
+        \\    var b: @Vector(4, i32) = [4]i32{111, 0, 333, 444};
+        \\    const x = div0(a, b);
+        \\}
+        \\fn div0(a: @Vector(4, i32), b: @Vector(4, i32)) @Vector(4, i32) {
+        \\    return @divTrunc(a, b);
+        \\}
+    );
+
     cases.addRuntimeSafety("exact division failure",
         \\pub fn panic(message: []const u8, stack_trace: ?*@import("builtin").StackTrace) noreturn {
         \\    @import("std").os.exit(126);
@@ -552,16 +680,31 @@ pub fn addCases(cases: *tests.CompareOutputContext) void {
         \\}
     );
 
-    cases.addRuntimeSafety("cast []u8 to bigger slice of wrong size",
+    cases.addRuntimeSafety("exact division failure - vectors",
         \\pub fn panic(message: []const u8, stack_trace: ?*@import("builtin").StackTrace) noreturn {
         \\    @import("std").os.exit(126);
+        \\}
+        \\pub fn main() !void {
+        \\    var a: @Vector(4, i32) = [4]i32{111, 222, 333, 444};
+        \\    var b: @Vector(4, i32) = [4]i32{111, 222, 333, 441};
+        \\    const x = divExact(a, b);
+        \\}
+        \\fn divExact(a: @Vector(4, i32), b: @Vector(4, i32)) @Vector(4, i32) {
+        \\    return @divExact(a, b);
+        \\}
+    );
+
+    cases.addRuntimeSafety("cast []u8 to bigger slice of wrong size",
+        \\const std = @import("std");
+        \\pub fn panic(message: []const u8, stack_trace: ?*std.builtin.StackTrace) noreturn {
+        \\    std.os.exit(126);
         \\}
         \\pub fn main() !void {
         \\    const x = widenSlice(&[_]u8{1, 2, 3, 4, 5});
         \\    if (x.len == 0) return error.Whatever;
         \\}
         \\fn widenSlice(slice: []align(1) const u8) []align(1) const i32 {
-        \\    return @bytesToSlice(i32, slice);
+        \\    return std.mem.bytesAsSlice(i32, slice);
         \\}
     );
 
@@ -656,17 +799,18 @@ pub fn addCases(cases: *tests.CompareOutputContext) void {
     );
 
     cases.addRuntimeSafety("@alignCast misaligned",
-        \\pub fn panic(message: []const u8, stack_trace: ?*@import("builtin").StackTrace) noreturn {
-        \\    @import("std").os.exit(126);
+        \\const std = @import("std");
+        \\pub fn panic(message: []const u8, stack_trace: ?*std.builtin.StackTrace) noreturn {
+        \\    std.os.exit(126);
         \\}
         \\pub fn main() !void {
         \\    var array align(4) = [_]u32{0x11111111, 0x11111111};
-        \\    const bytes = @sliceToBytes(array[0..]);
+        \\    const bytes = std.mem.sliceAsBytes(array[0..]);
         \\    if (foo(bytes) != 0x11111111) return error.Wrong;
         \\}
         \\fn foo(bytes: []u8) u32 {
         \\    const slice4 = bytes[1..5];
-        \\    const int_slice = @bytesToSlice(u32, @alignCast(4, slice4));
+        \\    const int_slice = std.mem.bytesAsSlice(u32, @alignCast(4, slice4));
         \\    return int_slice[0];
         \\}
     );
@@ -741,6 +885,19 @@ pub fn addCases(cases: *tests.CompareOutputContext) void {
         \\
         \\async fn printTrace(p: anyframe->anyerror!void) void {
         \\    (await p) catch unreachable;
+        \\}
+    );
+
+    // Slicing a C pointer returns a non-allowzero slice, thus we need to emit
+    // a safety check to ensure the pointer is not null.
+    cases.addRuntimeSafety("slicing null C pointer",
+        \\pub fn panic(message: []const u8, stack_trace: ?*@import("builtin").StackTrace) noreturn {
+        \\    @import("std").os.exit(126);
+        \\}
+        \\
+        \\pub fn main() void {
+        \\    var ptr: [*c]const u32 = null;
+        \\    var slice = ptr[0..3];
         \\}
     );
 }

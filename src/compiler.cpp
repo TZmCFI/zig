@@ -4,64 +4,6 @@
 
 #include <stdio.h>
 
-static Buf saved_dynamic_linker_path = BUF_INIT;
-static bool searched_for_dyn_linker = false;
-
-static void detect_dynamic_linker(Buf *lib_path) {
-#if defined(ZIG_OS_LINUX)
-    for (size_t i = 0; possible_ld_names[i] != NULL; i += 1) {
-        if (buf_ends_with_str(lib_path, possible_ld_names[i])) {
-            buf_init_from_buf(&saved_dynamic_linker_path, lib_path);
-            break;
-        }
-    }
-#endif
-}
-
-Buf *get_self_libc_path(void) {
-    static Buf saved_libc_path = BUF_INIT;
-    static bool searched_for_libc = false;
-
-    for (;;) {
-        if (saved_libc_path.list.length != 0) {
-            return &saved_libc_path;
-        }
-        if (searched_for_libc)
-            return nullptr;
-        ZigList<Buf *> lib_paths = {};
-        Error err;
-        if ((err = os_self_exe_shared_libs(lib_paths)))
-            return nullptr;
-        for (size_t i = 0; i < lib_paths.length; i += 1) {
-            Buf *lib_path = lib_paths.at(i);
-            if (buf_ends_with_str(lib_path, "libc.so.6")) {
-                buf_init_from_buf(&saved_libc_path, lib_path);
-                return &saved_libc_path;
-            }
-        }
-        searched_for_libc = true;
-    }
-}
-
-Buf *get_self_dynamic_linker_path(void) {
-    for (;;) {
-        if (saved_dynamic_linker_path.list.length != 0) {
-            return &saved_dynamic_linker_path;
-        }
-        if (searched_for_dyn_linker)
-            return nullptr;
-        ZigList<Buf *> lib_paths = {};
-        Error err;
-        if ((err = os_self_exe_shared_libs(lib_paths)))
-            return nullptr;
-        for (size_t i = 0; i < lib_paths.length; i += 1) {
-            Buf *lib_path = lib_paths.at(i);
-            detect_dynamic_linker(lib_path);
-        }
-        searched_for_dyn_linker = true;
-    }
-}
-
 Error get_compiler_id(Buf **result) {
     static Buf saved_compiler_id = BUF_INIT;
 
@@ -98,7 +40,6 @@ Error get_compiler_id(Buf **result) {
         return err;
     for (size_t i = 0; i < lib_paths.length; i += 1) {
         Buf *lib_path = lib_paths.at(i);
-        detect_dynamic_linker(lib_path);
         if ((err = cache_add_file(ch, lib_path)))
             return err;
     }
@@ -222,4 +163,26 @@ Buf *get_global_cache_dir(void) {
     os_path_join(&app_data_dir, buf_create_from_str("stage1"), &saved_global_cache_dir);
     buf_deinit(&app_data_dir);
     return &saved_global_cache_dir;
+}
+
+FileExt classify_file_ext(const char *filename_ptr, size_t filename_len) {
+    if (mem_ends_with_str(filename_ptr, filename_len, ".c")) {
+        return FileExtC;
+    } else if (mem_ends_with_str(filename_ptr, filename_len, ".C") ||
+        mem_ends_with_str(filename_ptr, filename_len, ".cc") ||
+        mem_ends_with_str(filename_ptr, filename_len, ".cpp") ||
+        mem_ends_with_str(filename_ptr, filename_len, ".cxx"))
+    {
+        return FileExtCpp;
+    } else if (mem_ends_with_str(filename_ptr, filename_len, ".ll")) {
+        return FileExtLLVMIr;
+    } else if (mem_ends_with_str(filename_ptr, filename_len, ".bc")) {
+        return FileExtLLVMBitCode;
+    } else if (mem_ends_with_str(filename_ptr, filename_len, ".s") ||
+        mem_ends_with_str(filename_ptr, filename_len, ".S"))
+    {
+        return FileExtAsm;
+    }
+    // TODO look for .so, .so.X, .so.X.Y, .so.X.Y.Z
+    return FileExtUnknown;
 }

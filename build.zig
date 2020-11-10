@@ -6,7 +6,6 @@ const BufMap = std.BufMap;
 const warn = std.debug.warn;
 const mem = std.mem;
 const ArrayList = std.ArrayList;
-const Buffer = std.Buffer;
 const io = std.io;
 const fs = std.fs;
 const InstallDirectoryOptions = std.build.InstallDirectoryOptions;
@@ -35,22 +34,14 @@ pub fn build(b: *Builder) !void {
 
     const test_step = b.step("test", "Run all the tests");
 
-    // find the stage0 build artifacts because we're going to re-use config.h and zig_cpp library
-    const build_info = try b.exec(&[_][]const u8{
-        b.zig_exe,
-        "BUILD_INFO",
-    });
-    var index: usize = 0;
-    var ctx = Context{
-        .cmake_binary_dir = nextValue(&index, build_info),
-        .cxx_compiler = nextValue(&index, build_info),
-        .llvm_config_exe = nextValue(&index, build_info),
-        .lld_include_dir = nextValue(&index, build_info),
-        .lld_libraries = nextValue(&index, build_info),
-        .dia_guids_lib = nextValue(&index, build_info),
-        .llvm = undefined,
-    };
-    ctx.llvm = try findLLVM(b, ctx.llvm_config_exe);
+    const config_h_text = if (b.option(
+        []const u8,
+        "config_h",
+        "Path to the generated config.h",
+    )) |config_h_path|
+        try std.fs.cwd().readFileAlloc(b.allocator, toNativePathSep(b, config_h_path), max_config_h_bytes)
+    else
+        try findAndReadConfigH(b);
 
     var test_stage2 = b.addTest("src-self-hosted/test.zig");
     test_stage2.setBuildMode(builtin.Mode.Debug);
@@ -61,25 +52,25 @@ pub fn build(b: *Builder) !void {
     var exe = b.addExecutable("zig", "src-self-hosted/main.zig");
     exe.setBuildMode(mode);
 
-    try configureStage2(b, test_stage2, ctx);
-    try configureStage2(b, exe, ctx);
-
-    addLibUserlandStep(b, mode);
-
     const skip_release = b.option(bool, "skip-release", "Main test suite skips release builds") orelse false;
     const skip_release_small = b.option(bool, "skip-release-small", "Main test suite skips release-small builds") orelse skip_release;
     const skip_release_fast = b.option(bool, "skip-release-fast", "Main test suite skips release-fast builds") orelse skip_release;
     const skip_release_safe = b.option(bool, "skip-release-safe", "Main test suite skips release-safe builds") orelse skip_release;
     const skip_non_native = b.option(bool, "skip-non-native", "Main test suite skips non-native builds") orelse false;
     const skip_libc = b.option(bool, "skip-libc", "Main test suite skips tests that link libc") orelse false;
-    const skip_self_hosted = b.option(bool, "skip-self-hosted", "Main test suite skips building self hosted compiler") orelse false;
-    if (!skip_self_hosted and builtin.os == .linux) {
-        // TODO evented I/O other OS's
+    const skip_self_hosted = (b.option(bool, "skip-self-hosted", "Main test suite skips building self hosted compiler") orelse false) or true; // TODO evented I/O good enough that this passes everywhere
+    if (!skip_self_hosted) {
         test_step.dependOn(&exe.step);
     }
 
     const only_install_lib_files = b.option(bool, "lib-files-only", "Only install library files") orelse false;
-    if (!only_install_lib_files) {
+    if (!only_install_lib_files and !skip_self_hosted) {
+        var ctx = parseConfigH(b, config_h_text);
+        ctx.llvm = try findLLVM(b, ctx.llvm_config_exe);
+
+        try configureStage2(b, test_stage2, ctx);
+        try configureStage2(b, exe, ctx);
+
         b.default_step.dependOn(&exe.step);
         exe.install();
     }
@@ -138,20 +129,21 @@ pub fn build(b: *Builder) !void {
     test_step.dependOn(tests.addRuntimeSafetyTests(b, test_filter, modes));
     test_step.dependOn(tests.addTranslateCTests(b, test_filter));
     test_step.dependOn(tests.addRunTranslatedCTests(b, test_filter));
-    test_step.dependOn(tests.addGenHTests(b, test_filter));
+    // tests for this feature are disabled until we have the self-hosted compiler available
+    //test_step.dependOn(tests.addGenHTests(b, test_filter));
     test_step.dependOn(tests.addCompileErrorTests(b, test_filter, modes));
     test_step.dependOn(docs_step);
 }
 
 fn dependOnLib(b: *Builder, lib_exe_obj: var, dep: LibraryDep) void {
-    for (dep.libdirs.toSliceConst()) |lib_dir| {
+    for (dep.libdirs.items) |lib_dir| {
         lib_exe_obj.addLibPath(lib_dir);
     }
     const lib_dir = fs.path.join(
         b.allocator,
         &[_][]const u8{ dep.prefix, "lib" },
     ) catch unreachable;
-    for (dep.system_libs.toSliceConst()) |lib| {
+    for (dep.system_libs.items) |lib| {
         const static_bare_name = if (mem.eql(u8, lib, "curses"))
             @as([]const u8, "libncurses.a")
         else
@@ -167,16 +159,16 @@ fn dependOnLib(b: *Builder, lib_exe_obj: var, dep: LibraryDep) void {
             lib_exe_obj.linkSystemLibrary(lib);
         }
     }
-    for (dep.libs.toSliceConst()) |lib| {
+    for (dep.libs.items) |lib| {
         lib_exe_obj.addObjectFile(lib);
     }
-    for (dep.includes.toSliceConst()) |include_path| {
+    for (dep.includes.items) |include_path| {
         lib_exe_obj.addIncludeDir(include_path);
     }
 }
 
 fn fileExists(filename: []const u8) !bool {
-    fs.File.access(filename) catch |err| switch (err) {
+    fs.cwd().access(filename, .{}) catch |err| switch (err) {
         error.FileNotFound => return false,
         else => return err,
     };
@@ -233,10 +225,11 @@ fn findLLVM(b: *Builder, llvm_config_exe: []const u8) !LibraryDep {
                 if (fs.path.isAbsolute(lib_arg)) {
                     try result.libs.append(lib_arg);
                 } else {
+                    var lib_arg_copy = lib_arg;
                     if (mem.endsWith(u8, lib_arg, ".lib")) {
-                        lib_arg = lib_arg[0 .. lib_arg.len - 4];
+                        lib_arg_copy = lib_arg[0 .. lib_arg.len - 4];
                     }
-                    try result.system_libs.append(lib_arg);
+                    try result.system_libs.append(lib_arg_copy);
                 }
             }
         }
@@ -264,25 +257,6 @@ fn findLLVM(b: *Builder, llvm_config_exe: []const u8) !LibraryDep {
     return result;
 }
 
-fn nextValue(index: *usize, build_info: []const u8) []const u8 {
-    const start = index.*;
-    while (true) : (index.* += 1) {
-        switch (build_info[index.*]) {
-            '\n' => {
-                const result = build_info[start..index.*];
-                index.* += 1;
-                return result;
-            },
-            '\r' => {
-                const result = build_info[start..index.*];
-                index.* += 2;
-                return result;
-            },
-            else => continue,
-        }
-    }
-}
-
 fn configureStage2(b: *Builder, exe: var, ctx: Context) !void {
     exe.addIncludeDir("src");
     exe.addIncludeDir(ctx.cmake_binary_dir);
@@ -299,13 +273,23 @@ fn configureStage2(b: *Builder, exe: var, ctx: Context) !void {
         addCppLib(b, exe, ctx.cmake_binary_dir, "embedded_lld_coff");
         addCppLib(b, exe, ctx.cmake_binary_dir, "embedded_lld_lib");
     }
+    {
+        var it = mem.tokenize(ctx.clang_libraries, ";");
+        while (it.next()) |lib| {
+            exe.addObjectFile(lib);
+        }
+    }
     dependOnLib(b, exe, ctx.llvm);
 
-    if (exe.target.getOs() == .linux) {
-        try addCxxKnownPath(b, ctx, exe, "libstdc++.a",
-            \\Unable to determine path to libstdc++.a
-            \\On Fedora, install libstdc++-static and try again.
-        );
+    if (exe.target.getOsTag() == .linux) {
+        // First we try to static link against gcc libstdc++. If that doesn't work,
+        // we fall back to -lc++ and cross our fingers.
+        addCxxKnownPath(b, ctx, exe, "libstdc++.a", "") catch |err| switch (err) {
+            error.RequiredLibraryNotFound => {
+                exe.linkSystemLibrary("c++");
+            },
+            else => |e| return e,
+        };
 
         exe.linkSystemLibrary("pthread");
     } else if (exe.target.isFreeBSD()) {
@@ -324,7 +308,7 @@ fn configureStage2(b: *Builder, exe: var, ctx: Context) !void {
                 // System compiler, not gcc.
                 exe.linkSystemLibrary("c++");
             },
-            else => return err,
+            else => |e| return e,
         }
     }
 
@@ -364,31 +348,98 @@ const Context = struct {
     llvm_config_exe: []const u8,
     lld_include_dir: []const u8,
     lld_libraries: []const u8,
+    clang_libraries: []const u8,
     dia_guids_lib: []const u8,
     llvm: LibraryDep,
 };
 
-fn addLibUserlandStep(b: *Builder, mode: builtin.Mode) void {
-    const artifact = b.addStaticLibrary("userland", "src-self-hosted/stage1.zig");
-    artifact.disable_gen_h = true;
-    artifact.bundle_compiler_rt = true;
-    artifact.setTarget(builtin.arch, builtin.os, builtin.abi);
-    artifact.setBuildMode(mode);
-    artifact.force_pic = true;
-    if (mode != .Debug) {
-        artifact.strip = true;
-    }
-    artifact.linkSystemLibrary("c");
-    if (builtin.os == .windows) {
-        artifact.linkSystemLibrary("ntdll");
-    }
-    const libuserland_step = b.step("libuserland", "Build the userland compiler library for use in stage1");
-    libuserland_step.dependOn(&artifact.step);
+const max_config_h_bytes = 1 * 1024 * 1024;
 
-    const output_dir = b.option(
-        []const u8,
-        "output-dir",
-        "For libuserland step, where to put the output",
-    ) orelse return;
-    artifact.setOutputDir(output_dir);
+fn findAndReadConfigH(b: *Builder) ![]const u8 {
+    var check_dir = fs.path.dirname(b.zig_exe).?;
+    while (true) {
+        var dir = try fs.cwd().openDir(check_dir, .{});
+        defer dir.close();
+
+        const config_h_text = dir.readFileAlloc(b.allocator, "config.h", max_config_h_bytes) catch |err| switch (err) {
+            error.FileNotFound => {
+                const new_check_dir = fs.path.dirname(check_dir);
+                if (new_check_dir == null or mem.eql(u8, new_check_dir.?, check_dir)) {
+                    std.debug.warn("Unable to find config.h file relative to Zig executable.\n", .{});
+                    std.debug.warn("`zig build` must be run using a Zig executable within the source tree.\n", .{});
+                    std.process.exit(1);
+                }
+                check_dir = new_check_dir.?;
+                continue;
+            },
+            else => |e| return e,
+        };
+        return config_h_text;
+    } else unreachable; // TODO should not need `else unreachable`.
+}
+
+fn parseConfigH(b: *Builder, config_h_text: []const u8) Context {
+    var ctx: Context = .{
+        .cmake_binary_dir = undefined,
+        .cxx_compiler = undefined,
+        .llvm_config_exe = undefined,
+        .lld_include_dir = undefined,
+        .lld_libraries = undefined,
+        .clang_libraries = undefined,
+        .dia_guids_lib = undefined,
+        .llvm = undefined,
+    };
+
+    const mappings = [_]struct { prefix: []const u8, field: []const u8 }{
+        .{
+            .prefix = "#define ZIG_CMAKE_BINARY_DIR ",
+            .field = "cmake_binary_dir",
+        },
+        .{
+            .prefix = "#define ZIG_CXX_COMPILER ",
+            .field = "cxx_compiler",
+        },
+        .{
+            .prefix = "#define ZIG_LLD_INCLUDE_PATH ",
+            .field = "lld_include_dir",
+        },
+        .{
+            .prefix = "#define ZIG_LLD_LIBRARIES ",
+            .field = "lld_libraries",
+        },
+        .{
+            .prefix = "#define ZIG_CLANG_LIBRARIES ",
+            .field = "clang_libraries",
+        },
+        .{
+            .prefix = "#define ZIG_LLVM_CONFIG_EXE ",
+            .field = "llvm_config_exe",
+        },
+        .{
+            .prefix = "#define ZIG_DIA_GUIDS_LIB ",
+            .field = "dia_guids_lib",
+        },
+    };
+
+    var lines_it = mem.tokenize(config_h_text, "\r\n");
+    while (lines_it.next()) |line| {
+        inline for (mappings) |mapping| {
+            if (mem.startsWith(u8, line, mapping.prefix)) {
+                var it = mem.split(line, "\"");
+                _ = it.next().?; // skip the stuff before the quote
+                const quoted = it.next().?; // the stuff inside the quote
+                @field(ctx, mapping.field) = toNativePathSep(b, quoted);
+            }
+        }
+    }
+    return ctx;
+}
+
+fn toNativePathSep(b: *Builder, s: []const u8) []u8 {
+    const duplicated = mem.dupe(b.allocator, u8, s) catch unreachable;
+    for (duplicated) |*byte| switch (byte.*) {
+        '/' => byte.* = fs.path.sep,
+        else => {},
+    };
+    return duplicated;
 }

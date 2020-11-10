@@ -147,7 +147,7 @@ static void ast_invalid_token_error(ParseContext *pc, Token *token) {
 }
 
 static AstNode *ast_create_node_no_line_info(ParseContext *pc, NodeType type) {
-    AstNode *node = allocate<AstNode>(1);
+    AstNode *node = heap::c_allocator.create<AstNode>();
     node->type = type;
     node->owner = pc->owner;
     return node;
@@ -526,6 +526,15 @@ static void ast_parse_container_doc_comments(ParseContext *pc, Buf *buf) {
     }
 }
 
+enum ContainerFieldState {
+    // no fields have been seen
+    ContainerFieldStateNone,
+    // currently parsing fields
+    ContainerFieldStateSeen,
+    // saw fields and then a declaration after them
+    ContainerFieldStateEnd,
+};
+
 // ContainerMembers
 //     <- TestDecl ContainerMembers
 //      / TopLevelComptime ContainerMembers
@@ -537,17 +546,29 @@ static AstNodeContainerDecl ast_parse_container_members(ParseContext *pc) {
     AstNodeContainerDecl res = {};
     Buf tld_doc_comment_buf = BUF_INIT;
     buf_resize(&tld_doc_comment_buf, 0);
+    ContainerFieldState field_state = ContainerFieldStateNone;
+    Token *first_token = nullptr;
     for (;;) {
         ast_parse_container_doc_comments(pc, &tld_doc_comment_buf);
 
+        Token *peeked_token = peek_token(pc);
+
         AstNode *test_decl = ast_parse_test_decl(pc);
         if (test_decl != nullptr) {
+            if (field_state == ContainerFieldStateSeen) {
+                field_state = ContainerFieldStateEnd;
+                first_token = peeked_token;
+            }
             res.decls.append(test_decl);
             continue;
         }
 
         AstNode *top_level_comptime = ast_parse_top_level_comptime(pc);
         if (top_level_comptime != nullptr) {
+            if (field_state == ContainerFieldStateSeen) {
+                field_state = ContainerFieldStateEnd;
+                first_token = peeked_token;
+            }
             res.decls.append(top_level_comptime);
             continue;
         }
@@ -555,11 +576,17 @@ static AstNodeContainerDecl ast_parse_container_members(ParseContext *pc) {
         Buf doc_comment_buf = BUF_INIT;
         ast_parse_doc_comments(pc, &doc_comment_buf);
 
+        peeked_token = peek_token(pc);
+
         Token *visib_token = eat_token_if(pc, TokenIdKeywordPub);
         VisibMod visib_mod = visib_token != nullptr ? VisibModPub : VisibModPrivate;
 
         AstNode *top_level_decl = ast_parse_top_level_decl(pc, visib_mod, &doc_comment_buf);
         if (top_level_decl != nullptr) {
+            if (field_state == ContainerFieldStateSeen) {
+                field_state = ContainerFieldStateEnd;
+                first_token = peeked_token;
+            }
             res.decls.append(top_level_decl);
             continue;
         }
@@ -572,6 +599,16 @@ static AstNodeContainerDecl ast_parse_container_members(ParseContext *pc) {
 
         AstNode *container_field = ast_parse_container_field(pc);
         if (container_field != nullptr) {
+            switch (field_state) {
+                case ContainerFieldStateNone:
+                    field_state = ContainerFieldStateSeen;
+                    break;
+                case ContainerFieldStateSeen:
+                    break;
+                case ContainerFieldStateEnd:
+                    ast_error(pc, first_token, "declarations are not allowed between container fields");                    
+            }
+
             assert(container_field->type == NodeTypeStructField);
             container_field->data.struct_field.doc_comments = doc_comment_buf;
             container_field->data.struct_field.comptime_token = comptime_token;
@@ -689,6 +726,9 @@ static AstNode *ast_parse_top_level_decl(ParseContext *pc, VisibMod visib_mod, B
 
             AstNode *res = fn_proto;
             if (body != nullptr) {
+                if (fn_proto->data.fn_proto.is_extern) {
+                    ast_error(pc, first, "extern functions have no body");
+                }
                 res = ast_create_node_copy_line_info(pc, NodeTypeFnDef, fn_proto);
                 res->data.fn_def.fn_proto = fn_proto;
                 res->data.fn_def.body = body;
@@ -806,7 +846,7 @@ static AstNode *ast_parse_fn_proto(ParseContext *pc) {
         if (param_decl->data.param_decl.is_var_args)
             res->data.fn_proto.is_var_args = true;
         if (i != params.length - 1 && res->data.fn_proto.is_var_args)
-            ast_error(pc, first, "Function prototype have varargs as a none last paramter.");
+            ast_error(pc, first, "Function prototype have varargs as a none last parameter.");
     }
     return res;
 }
@@ -873,9 +913,10 @@ static AstNode *ast_parse_container_field(ParseContext *pc) {
 // Statement
 //     <- KEYWORD_comptime? VarDecl
 //      / KEYWORD_comptime BlockExprStatement
+//      / KEYWORD_noasync BlockExprStatement
 //      / KEYWORD_suspend (SEMICOLON / BlockExprStatement)
 //      / KEYWORD_defer BlockExprStatement
-//      / KEYWORD_errdefer BlockExprStatement
+//      / KEYWORD_errdefer Payload? BlockExprStatement
 //      / IfStatement
 //      / LabeledStatement
 //      / SwitchExpr
@@ -896,6 +937,14 @@ static AstNode *ast_parse_statement(ParseContext *pc) {
         return res;
     }
 
+    Token *noasync = eat_token_if(pc, TokenIdKeywordNoAsync);
+    if (noasync != nullptr) {
+        AstNode *statement = ast_expect(pc, ast_parse_block_expr_statement);
+        AstNode *res = ast_create_node(pc, NodeTypeNoAsync, noasync);
+        res->data.noasync_expr.expr = statement;
+        return res;
+    }
+
     Token *suspend = eat_token_if(pc, TokenIdKeywordSuspend);
     if (suspend != nullptr) {
         AstNode *statement = nullptr;
@@ -911,12 +960,18 @@ static AstNode *ast_parse_statement(ParseContext *pc) {
     if (defer == nullptr)
         defer = eat_token_if(pc, TokenIdKeywordErrdefer);
     if (defer != nullptr) {
+        Token *payload = (defer->id == TokenIdKeywordErrdefer) ?
+            ast_parse_payload(pc) : nullptr;
         AstNode *statement = ast_expect(pc, ast_parse_block_expr_statement);
         AstNode *res = ast_create_node(pc, NodeTypeDefer, defer);
+
         res->data.defer.kind = ReturnKindUnconditional;
         res->data.defer.expr = statement;
-        if (defer->id == TokenIdKeywordErrdefer)
+        if (defer->id == TokenIdKeywordErrdefer) {
             res->data.defer.kind = ReturnKindError;
+            if (payload != nullptr)
+                res->data.defer.err_payload = token_symbol(pc, payload);
+        }
         return res;
     }
 
@@ -1234,6 +1289,7 @@ static AstNode *ast_parse_prefix_expr(ParseContext *pc) {
 //      / IfExpr
 //      / KEYWORD_break BreakLabel? Expr?
 //      / KEYWORD_comptime Expr
+//      / KEYWORD_noasync Expr
 //      / KEYWORD_continue BreakLabel?
 //      / KEYWORD_resume Expr
 //      / KEYWORD_return Expr?
@@ -1265,6 +1321,14 @@ static AstNode *ast_parse_primary_expr(ParseContext *pc) {
         AstNode *expr = ast_expect(pc, ast_parse_expr);
         AstNode *res = ast_create_node(pc, NodeTypeCompTime, comptime);
         res->data.comptime_expr.expr = expr;
+        return res;
+    }
+
+    Token *noasync = eat_token_if(pc, TokenIdKeywordNoAsync);
+    if (noasync != nullptr) {
+        AstNode *expr = ast_expect(pc, ast_parse_expr);
+        AstNode *res = ast_create_node(pc, NodeTypeNoAsync, noasync);
+        res->data.noasync_expr.expr = expr;
         return res;
     }
 
@@ -1456,13 +1520,11 @@ static AstNode *ast_parse_error_union_expr(ParseContext *pc) {
 
 // SuffixExpr
 //     <- KEYWORD_async   PrimaryTypeExpr SuffixOp* FnCallArguments
-//      / KEYWORD_noasync PrimaryTypeExpr SuffixOp* FnCallArguments
 //      / PrimaryTypeExpr (SuffixOp / FnCallArguments)*
 static AstNode *ast_parse_suffix_expr(ParseContext *pc) {
-    Token *async_token = eat_token(pc);
-    bool is_async = async_token->id == TokenIdKeywordAsync;
-    if (is_async || async_token->id == TokenIdKeywordNoAsync) {
-        if (is_async && eat_token_if(pc, TokenIdKeywordFn) != nullptr) {
+    Token *async_token = eat_token_if(pc, TokenIdKeywordAsync);
+    if (async_token) {
+        if (eat_token_if(pc, TokenIdKeywordFn) != nullptr) {
             // HACK: If we see the keyword `fn`, then we assume that
             //       we are parsing an async fn proto, and not a call.
             //       We therefore put back all tokens consumed by the async
@@ -1512,13 +1574,12 @@ static AstNode *ast_parse_suffix_expr(ParseContext *pc) {
         assert(args->type == NodeTypeFnCallExpr);
 
         AstNode *res = ast_create_node(pc, NodeTypeFnCallExpr, async_token);
-        res->data.fn_call_expr.modifier = is_async ? CallModifierAsync : CallModifierNoAsync;
+        res->data.fn_call_expr.modifier = CallModifierAsync;
         res->data.fn_call_expr.seen = false;
         res->data.fn_call_expr.fn_ref_expr = child;
         res->data.fn_call_expr.params = args->data.fn_call_expr.params;
         return res;
     }
-    put_back_token(pc);
 
     AstNode *res = ast_parse_primary_type_expr(pc);
     if (res == nullptr)
@@ -1579,6 +1640,7 @@ static AstNode *ast_parse_suffix_expr(ParseContext *pc) {
 //      / IfTypeExpr
 //      / INTEGER
 //      / KEYWORD_comptime TypeExpr
+//      / KEYWORD_noasync TypeExpr
 //      / KEYWORD_error DOT IDENTIFIER
 //      / KEYWORD_false
 //      / KEYWORD_null
@@ -1677,6 +1739,14 @@ static AstNode *ast_parse_primary_type_expr(ParseContext *pc) {
         AstNode *expr = ast_expect(pc, ast_parse_type_expr);
         AstNode *res = ast_create_node(pc, NodeTypeCompTime, comptime);
         res->data.comptime_expr.expr = expr;
+        return res;
+    }
+
+    Token *noasync = eat_token_if(pc, TokenIdKeywordNoAsync);
+    if (noasync != nullptr) {
+        AstNode *expr = ast_expect(pc, ast_parse_type_expr);
+        AstNode *res = ast_create_node(pc, NodeTypeNoAsync, noasync);
+        res->data.noasync_expr.expr = expr;
         return res;
     }
 
@@ -1966,7 +2036,7 @@ static AsmOutput *ast_parse_asm_output_item(ParseContext *pc) {
 
     expect_token(pc, TokenIdRParen);
 
-    AsmOutput *res = allocate<AsmOutput>(1);
+    AsmOutput *res = heap::c_allocator.create<AsmOutput>();
     res->asm_symbolic_name = token_buf(sym_name);
     res->constraint = token_buf(str);
     res->variable_name = token_buf(var_name);
@@ -2003,7 +2073,7 @@ static AsmInput *ast_parse_asm_input_item(ParseContext *pc) {
     AstNode *expr = ast_expect(pc, ast_parse_expr);
     expect_token(pc, TokenIdRParen);
 
-    AsmInput *res = allocate<AsmInput>(1);
+    AsmInput *res = heap::c_allocator.create<AsmInput>();
     res->asm_symbolic_name = token_buf(sym_name);
     res->constraint = token_buf(constraint);
     res->expr = expr;
@@ -3005,6 +3075,7 @@ void ast_visit_node_children(AstNode *node, void (*visit)(AstNode **, void *cont
             break;
         case NodeTypeDefer:
             visit_field(&node->data.defer.expr, visit, context);
+            visit_field(&node->data.defer.err_payload, visit, context);
             break;
         case NodeTypeVariableDeclaration:
             visit_field(&node->data.variable_declaration.type, visit, context);
@@ -3116,6 +3187,9 @@ void ast_visit_node_children(AstNode *node, void (*visit)(AstNode **, void *cont
             visit_field(&node->data.switch_range.end, visit, context);
             break;
         case NodeTypeCompTime:
+            visit_field(&node->data.comptime_expr.expr, visit, context);
+            break;
+        case NodeTypeNoAsync:
             visit_field(&node->data.comptime_expr.expr, visit, context);
             break;
         case NodeTypeBreak:

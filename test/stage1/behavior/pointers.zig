@@ -1,6 +1,7 @@
 const std = @import("std");
-const expect = std.testing.expect;
-const expectError = std.testing.expectError;
+const testing = std.testing;
+const expect = testing.expect;
+const expectError = testing.expectError;
 
 test "dereference pointer" {
     comptime testDerefPtr();
@@ -159,12 +160,13 @@ test "allowzero pointer and slice" {
     var opt_ptr: ?[*]allowzero i32 = ptr;
     expect(opt_ptr != null);
     expect(@ptrToInt(ptr) == 0);
-    var slice = ptr[0..10];
-    expect(@TypeOf(slice) == []allowzero i32);
+    var runtime_zero: usize = 0;
+    var slice = ptr[runtime_zero..10];
+    comptime expect(@TypeOf(slice) == []allowzero i32);
     expect(@ptrToInt(&slice[5]) == 20);
 
-    expect(@typeInfo(@TypeOf(ptr)).Pointer.is_allowzero);
-    expect(@typeInfo(@TypeOf(slice)).Pointer.is_allowzero);
+    comptime expect(@typeInfo(@TypeOf(ptr)).Pointer.is_allowzero);
+    comptime expect(@typeInfo(@TypeOf(slice)).Pointer.is_allowzero);
 }
 
 test "assign null directly to C pointer and test null equality" {
@@ -224,7 +226,7 @@ test "null terminated pointer" {
             var zero_ptr: [*:0]const u8 = @ptrCast([*:0]const u8, &array_with_zero);
             var no_zero_ptr: [*]const u8 = zero_ptr;
             var zero_ptr_again = @ptrCast([*:0]const u8, no_zero_ptr);
-            expect(std.mem.eql(u8, std.mem.toSliceConst(u8, zero_ptr_again), "hello"));
+            expect(std.mem.eql(u8, std.mem.spanZ(zero_ptr_again), "hello"));
         }
     };
     S.doTheTest();
@@ -252,7 +254,7 @@ test "pointer sentinel with enums" {
         };
 
         fn doTheTest() void {
-            var ptr: [*:.sentinel]Number = &[_:.sentinel]Number{ .one, .two, .two, .one };
+            var ptr: [*:.sentinel]const Number = &[_:.sentinel]Number{ .one, .two, .two, .one };
             expect(ptr[4] == .sentinel); // TODO this should be comptime expect, see #3731
         }
     };
@@ -263,7 +265,7 @@ test "pointer sentinel with enums" {
 test "pointer sentinel with optional element" {
     const S = struct {
         fn doTheTest() void {
-            var ptr: [*:null]?i32 = &[_:null]?i32{ 1, 2, 3, 4 };
+            var ptr: [*:null]const ?i32 = &[_:null]?i32{ 1, 2, 3, 4 };
             expect(ptr[4] == null); // TODO this should be comptime expect, see #3731
         }
     };
@@ -275,7 +277,7 @@ test "pointer sentinel with +inf" {
     const S = struct {
         fn doTheTest() void {
             const inf = std.math.inf_f32;
-            var ptr: [*:inf]f32 = &[_:inf]f32{ 1.1, 2.2, 3.3, 4.4 };
+            var ptr: [*:inf]const f32 = &[_:inf]f32{ 1.1, 2.2, 3.3, 4.4 };
             expect(ptr[4] == inf); // TODO this should be comptime expect, see #3731
         }
     };
@@ -317,4 +319,21 @@ test "pointer arithmetic affects the alignment" {
         const ptr4 = ptr + 4; // 3 * 4 = 12 -> lcd(8,12) = 4
         expect(@typeInfo(@TypeOf(ptr4)).Pointer.alignment == 4);
     }
+}
+
+test "@ptrToInt on null optional at comptime" {
+    {
+        const pointer = @intToPtr(?*u8, 0x000);
+        const x = @ptrToInt(pointer);
+        comptime expect(0 == @ptrToInt(pointer));
+    }
+    {
+        const pointer = @intToPtr(?*u8, 0xf00);
+        comptime expect(0xf00 == @ptrToInt(pointer));
+    }
+}
+
+test "indexing array with sentinel returns correct type" {
+    var s: [:0]const u8 = "abc";
+    testing.expectEqualSlices(u8, "*const u8", @typeName(@TypeOf(&s[0])));
 }

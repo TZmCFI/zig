@@ -1,20 +1,27 @@
-const builtin = @import("builtin");
+const std = @import("std");
+const builtin = std.builtin;
 const is_test = builtin.is_test;
 
-const is_gnu = switch (builtin.abi) {
-    .gnu, .gnuabin32, .gnuabi64, .gnueabi, .gnueabihf, .gnux32 => true,
-    else => false,
-};
-const is_mingw = builtin.os == .windows and is_gnu;
+const is_gnu = std.Target.current.abi.isGnu();
+const is_mingw = builtin.os.tag == .windows and is_gnu;
 
 comptime {
     const linkage = if (is_test) builtin.GlobalLinkage.Internal else builtin.GlobalLinkage.Weak;
     const strong_linkage = if (is_test) builtin.GlobalLinkage.Internal else builtin.GlobalLinkage.Strong;
 
     switch (builtin.arch) {
-        .i386, .x86_64 => @export(@import("compiler_rt/stack_probe.zig").zig_probe_stack, .{ .name = "__zig_probe_stack", .linkage = linkage }),
+        .i386,
+        .x86_64,
+        => @export(@import("compiler_rt/stack_probe.zig").zig_probe_stack, .{
+            .name = "__zig_probe_stack",
+            .linkage = linkage,
+        }),
+
         else => {},
     }
+
+    // __clear_cache manages its own logic about whether to be exported or not.
+    _ = @import("compiler_rt/clear_cache.zig").clear_cache;
 
     @export(@import("compiler_rt/compareXf2.zig").__lesf2, .{ .name = "__lesf2", .linkage = linkage });
     @export(@import("compiler_rt/compareXf2.zig").__ledf2, .{ .name = "__ledf2", .linkage = linkage });
@@ -66,10 +73,14 @@ comptime {
 
     @export(@import("compiler_rt/divsf3.zig").__divsf3, .{ .name = "__divsf3", .linkage = linkage });
     @export(@import("compiler_rt/divdf3.zig").__divdf3, .{ .name = "__divdf3", .linkage = linkage });
+    @export(@import("compiler_rt/divtf3.zig").__divtf3, .{ .name = "__divtf3", .linkage = linkage });
 
-    @export(@import("compiler_rt/ashlti3.zig").__ashlti3, .{ .name = "__ashlti3", .linkage = linkage });
-    @export(@import("compiler_rt/lshrti3.zig").__lshrti3, .{ .name = "__lshrti3", .linkage = linkage });
-    @export(@import("compiler_rt/ashrti3.zig").__ashrti3, .{ .name = "__ashrti3", .linkage = linkage });
+    @export(@import("compiler_rt/shift.zig").__ashldi3, .{ .name = "__ashldi3", .linkage = linkage });
+    @export(@import("compiler_rt/shift.zig").__ashlti3, .{ .name = "__ashlti3", .linkage = linkage });
+    @export(@import("compiler_rt/shift.zig").__ashrdi3, .{ .name = "__ashrdi3", .linkage = linkage });
+    @export(@import("compiler_rt/shift.zig").__ashrti3, .{ .name = "__ashrti3", .linkage = linkage });
+    @export(@import("compiler_rt/shift.zig").__lshrdi3, .{ .name = "__lshrdi3", .linkage = linkage });
+    @export(@import("compiler_rt/shift.zig").__lshrti3, .{ .name = "__lshrti3", .linkage = linkage });
 
     @export(@import("compiler_rt/floatsiXf.zig").__floatsidf, .{ .name = "__floatsidf", .linkage = linkage });
     @export(@import("compiler_rt/floatsiXf.zig").__floatsisf, .{ .name = "__floatsisf", .linkage = linkage });
@@ -130,6 +141,7 @@ comptime {
     @export(@import("compiler_rt/int.zig").__udivmoddi4, .{ .name = "__udivmoddi4", .linkage = linkage });
     @export(@import("compiler_rt/popcountdi2.zig").__popcountdi2, .{ .name = "__popcountdi2", .linkage = linkage });
 
+    @export(@import("compiler_rt/int.zig").__mulsi3, .{ .name = "__mulsi3", .linkage = linkage });
     @export(@import("compiler_rt/muldi3.zig").__muldi3, .{ .name = "__muldi3", .linkage = linkage });
     @export(@import("compiler_rt/int.zig").__divmoddi4, .{ .name = "__divmoddi4", .linkage = linkage });
     @export(@import("compiler_rt/int.zig").__divsi3, .{ .name = "__divsi3", .linkage = linkage });
@@ -179,7 +191,7 @@ comptime {
         @export(@import("compiler_rt/arm.zig").__aeabi_memclr, .{ .name = "__aeabi_memclr4", .linkage = linkage });
         @export(@import("compiler_rt/arm.zig").__aeabi_memclr, .{ .name = "__aeabi_memclr8", .linkage = linkage });
 
-        if (builtin.os == .linux) {
+        if (builtin.os.tag == .linux) {
             @export(@import("compiler_rt/arm.zig").__aeabi_read_tp, .{ .name = "__aeabi_read_tp", .linkage = linkage });
         }
 
@@ -226,6 +238,10 @@ comptime {
         @export(@import("compiler_rt/divsf3.zig").__aeabi_fdiv, .{ .name = "__aeabi_fdiv", .linkage = linkage });
         @export(@import("compiler_rt/divdf3.zig").__aeabi_ddiv, .{ .name = "__aeabi_ddiv", .linkage = linkage });
 
+        @export(@import("compiler_rt/shift.zig").__aeabi_llsl, .{ .name = "__aeabi_llsl", .linkage = linkage });
+        @export(@import("compiler_rt/shift.zig").__aeabi_lasr, .{ .name = "__aeabi_lasr", .linkage = linkage });
+        @export(@import("compiler_rt/shift.zig").__aeabi_llsr, .{ .name = "__aeabi_llsr", .linkage = linkage });
+
         @export(@import("compiler_rt/compareXf2.zig").__aeabi_fcmpeq, .{ .name = "__aeabi_fcmpeq", .linkage = linkage });
         @export(@import("compiler_rt/compareXf2.zig").__aeabi_fcmplt, .{ .name = "__aeabi_fcmplt", .linkage = linkage });
         @export(@import("compiler_rt/compareXf2.zig").__aeabi_fcmple, .{ .name = "__aeabi_fcmple", .linkage = linkage });
@@ -249,7 +265,7 @@ comptime {
         @export(@import("compiler_rt/aullrem.zig")._aullrem, .{ .name = "\x01__aullrem", .linkage = strong_linkage });
     }
 
-    if (builtin.os == .windows) {
+    if (builtin.os.tag == .windows) {
         // Default stack-probe functions emitted by LLVM
         if (is_mingw) {
             @export(@import("compiler_rt/stack_probe.zig")._chkstk, .{ .name = "_alloca", .linkage = strong_linkage });
@@ -287,7 +303,7 @@ comptime {
             else => {},
         }
     } else {
-        if (builtin.glibc_version != null) {
+        if (std.Target.current.isGnuLibC() and builtin.link_libc) {
             @export(__stack_chk_guard, .{ .name = "__stack_chk_guard", .linkage = linkage });
         }
         @export(@import("compiler_rt/divti3.zig").__divti3, .{ .name = "__divti3", .linkage = linkage });
@@ -301,12 +317,14 @@ comptime {
     @export(@import("compiler_rt/mulodi4.zig").__mulodi4, .{ .name = "__mulodi4", .linkage = linkage });
 }
 
+pub usingnamespace @import("compiler_rt/atomics.zig");
+
 // Avoid dragging in the runtime safety mechanisms into this .o file,
 // unless we're trying to test this file.
 pub fn panic(msg: []const u8, error_return_trace: ?*builtin.StackTrace) noreturn {
     @setCold(true);
     if (is_test) {
-        @import("std").debug.panic("{}", .{msg});
+        std.debug.panic("{}", .{msg});
     } else {
         unreachable;
     }

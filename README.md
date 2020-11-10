@@ -27,7 +27,7 @@ Note that you can
 
  * cmake >= 2.8.5
  * gcc >= 5.0.0 or clang >= 3.6.0
- * LLVM, Clang, LLD development libraries == 9.x, compiled with the same gcc or clang version above
+ * LLVM, Clang, LLD development libraries == 10.x, compiled with the same gcc or clang version above
    - Use the system package manager, or [build from source](https://github.com/ziglang/zig/wiki/How-to-build-LLVM,-libclang,-and-liblld-from-source#posix).
 
 ##### Windows
@@ -37,7 +37,7 @@ Note that you can
    - 2015 (version 14)
    - 2017 (version 15.8)
    - 2019 (version 16)
- * LLVM, Clang, LLD development libraries == 9.x
+ * LLVM, Clang, LLD development libraries == 10.x
    - Use the [pre-built binaries](https://github.com/ziglang/zig/wiki/Building-Zig-on-Windows) or [build from source](https://github.com/ziglang/zig/wiki/How-to-build-LLVM,-libclang,-and-liblld-from-source#windows).
 
 #### Instructions
@@ -54,13 +54,19 @@ make install
 ##### MacOS
 
 ```
-brew install cmake llvm@9
-brew outdated llvm@9 || brew upgrade llvm@9
+brew install cmake llvm
+brew outdated llvm || brew upgrade llvm
 mkdir build
 cd build
 cmake .. -DCMAKE_PREFIX_PATH=$(brew --prefix llvm)
 make install
 ```
+
+You will now run into this issue:
+[homebrew and llvm 10 packages in apt.llvm.org are broken with undefined reference to getPollyPluginInfo](https://github.com/ziglang/zig/issues/4799)
+
+Please help upstream LLVM and Homebrew solve this issue, there is nothing Zig
+can do about it. See that issue for a workaround you can do in the meantime.
 
 ##### Windows
 

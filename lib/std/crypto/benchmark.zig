@@ -23,8 +23,10 @@ const hashes = [_]Crypto{
     Crypto{ .ty = crypto.Sha512, .name = "sha512" },
     Crypto{ .ty = crypto.Sha3_256, .name = "sha3-256" },
     Crypto{ .ty = crypto.Sha3_512, .name = "sha3-512" },
+    Crypto{ .ty = crypto.gimli.Hash, .name = "gimli-hash" },
     Crypto{ .ty = crypto.Blake2s256, .name = "blake2s" },
     Crypto{ .ty = crypto.Blake2b512, .name = "blake2b" },
+    Crypto{ .ty = crypto.Blake3, .name = "blake3" },
 };
 
 pub fn benchmarkHash(comptime Hash: var, comptime bytes: comptime_int) !u64 {
@@ -118,7 +120,7 @@ fn usage() void {
 }
 
 fn mode(comptime x: comptime_int) comptime_int {
-    return if (builtin.mode == builtin.Mode.Debug) x / 64 else x;
+    return if (builtin.mode == .Debug) x / 64 else x;
 }
 
 // TODO(#1358): Replace with builtin formatted padding when available.
@@ -131,7 +133,7 @@ fn printPad(stdout: var, s: []const u8) !void {
 }
 
 pub fn main() !void {
-    const stdout = &std.io.getStdOut().outStream().stream;
+    const stdout = std.io.getStdOut().outStream();
 
     var buffer: [1024]u8 = undefined;
     var fixed = std.heap.FixedBufferAllocator.init(buffer[0..]);

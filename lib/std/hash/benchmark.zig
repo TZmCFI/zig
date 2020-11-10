@@ -168,13 +168,11 @@ fn usage() void {
 }
 
 fn mode(comptime x: comptime_int) comptime_int {
-    return if (builtin.mode == builtin.Mode.Debug) x / 64 else x;
+    return if (builtin.mode == .Debug) x / 64 else x;
 }
 
 pub fn main() !void {
-    var stdout_file = std.io.getStdOut();
-    var stdout_out_stream = stdout_file.outStream();
-    const stdout = &stdout_out_stream.stream;
+    const stdout = std.io.getStdOut().outStream();
 
     var buffer: [1024]u8 = undefined;
     var fixed = std.heap.FixedBufferAllocator.init(buffer[0..]);
@@ -250,13 +248,13 @@ pub fn main() !void {
                 if (H.has_iterative_api) {
                     prng.seed(seed);
                     const result = try benchmarkHash(H, count);
-                    try stdout.print("   iterative: {:4} MiB/s [{x:0<16}]\n", .{result.throughput / (1 * MiB), result.hash});
+                    try stdout.print("   iterative: {:4} MiB/s [{x:0<16}]\n", .{ result.throughput / (1 * MiB), result.hash });
                 }
 
                 if (!test_iterative_only) {
                     prng.seed(seed);
                     const result_small = try benchmarkHashSmallKeys(H, key_size, count);
-                    try stdout.print("  small keys: {:4} MiB/s [{x:0<16}]\n", .{result_small.throughput / (1 * MiB), result_small.hash});
+                    try stdout.print("  small keys: {:4} MiB/s [{x:0<16}]\n", .{ result_small.throughput / (1 * MiB), result_small.hash });
                 }
             }
         }

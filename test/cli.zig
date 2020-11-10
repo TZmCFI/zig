@@ -1,5 +1,4 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const testing = std.testing;
 const process = std.process;
 const fs = std.fs;
@@ -8,7 +7,7 @@ const ChildProcess = std.ChildProcess;
 var a: *std.mem.Allocator = undefined;
 
 pub fn main() !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
     var arg_it = process.args();
@@ -37,8 +36,8 @@ pub fn main() !void {
         testMissingOutputPath,
     };
     for (test_fns) |testFn| {
-        try fs.deleteTree(dir_path);
-        try fs.makeDir(dir_path);
+        try fs.cwd().deleteTree(dir_path);
+        try fs.cwd().makeDir(dir_path);
         try testFn(zig_exe, dir_path);
     }
 }
@@ -60,7 +59,12 @@ fn printCmd(cwd: []const u8, argv: []const []const u8) void {
 
 fn exec(cwd: []const u8, argv: []const []const u8) !ChildProcess.ExecResult {
     const max_output_size = 100 * 1024;
-    const result = ChildProcess.exec(a, argv, cwd, null, max_output_size) catch |err| {
+    const result = ChildProcess.exec(.{
+        .allocator = a,
+        .argv = argv,
+        .cwd = cwd,
+        .max_output_bytes = max_output_size,
+    }) catch |err| {
         std.debug.warn("The following command failed:\n", .{});
         printCmd(cwd, argv);
         return err;
@@ -93,16 +97,16 @@ fn testZigInitLib(zig_exe: []const u8, dir_path: []const u8) !void {
 fn testZigInitExe(zig_exe: []const u8, dir_path: []const u8) !void {
     _ = try exec(dir_path, &[_][]const u8{ zig_exe, "init-exe" });
     const run_result = try exec(dir_path, &[_][]const u8{ zig_exe, "build", "run" });
-    testing.expect(std.mem.eql(u8, run_result.stderr, "All your base are belong to us.\n"));
+    testing.expect(std.mem.eql(u8, run_result.stderr, "All your codebase are belong to us.\n"));
 }
 
 fn testGodboltApi(zig_exe: []const u8, dir_path: []const u8) anyerror!void {
-    if (builtin.os != .linux or builtin.arch != .x86_64) return;
+    if (std.Target.current.os.tag != .linux or std.Target.current.cpu.arch != .x86_64) return;
 
     const example_zig_path = try fs.path.join(a, &[_][]const u8{ dir_path, "example.zig" });
     const example_s_path = try fs.path.join(a, &[_][]const u8{ dir_path, "example.s" });
 
-    try std.io.writeFile(example_zig_path,
+    try fs.cwd().writeFile(example_zig_path,
         \\// Type your code here, or load an example.
         \\export fn square(num: i32) i32 {
         \\    return num * num;
@@ -125,7 +129,7 @@ fn testGodboltApi(zig_exe: []const u8, dir_path: []const u8) anyerror!void {
     };
     _ = try exec(dir_path, &args);
 
-    const out_asm = try std.io.readFileAlloc(a, example_s_path);
+    const out_asm = try std.fs.cwd().readFileAlloc(a, example_s_path, std.math.maxInt(usize));
     testing.expect(std.mem.indexOf(u8, out_asm, "square:") != null);
     testing.expect(std.mem.indexOf(u8, out_asm, "mov\teax, edi") != null);
     testing.expect(std.mem.indexOf(u8, out_asm, "imul\teax, edi") != null);

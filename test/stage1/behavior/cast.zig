@@ -261,10 +261,6 @@ fn testPeerErrorAndArray2(x: u8) anyerror![]const u8 {
 }
 
 test "@floatToInt" {
-    if (@import("builtin").arch == .riscv64) {
-        // TODO: https://github.com/ziglang/zig/issues/3338
-        return error.SkipZigTest;
-    }
     testFloatToInts();
     comptime testFloatToInts();
 }
@@ -304,20 +300,6 @@ fn cast128Float(x: u128) f128 {
     return @bitCast(f128, x);
 }
 
-test "const slice widen cast" {
-    const bytes align(4) = [_]u8{
-        0x12,
-        0x12,
-        0x12,
-        0x12,
-    };
-
-    const u32_value = @bytesToSlice(u32, bytes[0..])[0];
-    expect(u32_value == 0x12121212);
-
-    expect(@bitCast(u32, bytes) == 0x12121212);
-}
-
 test "single-item pointer of array to slice and to unknown length pointer" {
     testCastPtrOfArrayToSliceAndPtr();
     comptime testCastPtrOfArrayToSliceAndPtr();
@@ -347,7 +329,7 @@ fn testCastPtrOfArrayToSliceAndPtr() void {
 test "cast *[1][*]const u8 to [*]const ?[*]const u8" {
     const window_name = [1][*]const u8{"window name"};
     const x: [*]const ?[*]const u8 = &window_name;
-    expect(mem.eql(u8, std.mem.toSliceConst(u8, @ptrCast([*:0]const u8, x[0].?)), "window name"));
+    expect(mem.eql(u8, std.mem.spanZ(@ptrCast([*:0]const u8, x[0].?)), "window name"));
 }
 
 test "@intCast comptime_int" {
@@ -390,12 +372,6 @@ test "comptime_int @intToFloat" {
         expect(@TypeOf(result) == f32);
         expect(result == 1234.0);
     }
-}
-
-test "@bytesToSlice keeps pointer alignment" {
-    var bytes = [_]u8{ 0x01, 0x02, 0x03, 0x04 };
-    const numbers = @bytesToSlice(u32, bytes[0..]);
-    comptime expect(@TypeOf(numbers) == []align(@alignOf(@TypeOf(bytes))) u32);
 }
 
 test "@intCast i32 to u7" {
@@ -455,7 +431,8 @@ fn incrementVoidPtrValue(value: ?*c_void) void {
 
 test "implicit cast from [*]T to ?*c_void" {
     var a = [_]u8{ 3, 2, 1 };
-    incrementVoidPtrArray(a[0..].ptr, 3);
+    var runtime_zero: usize = 0;
+    incrementVoidPtrArray(a[runtime_zero..].ptr, 3);
     expect(std.mem.eql(u8, &a, &[_]u8{ 4, 3, 2 }));
 }
 
@@ -485,10 +462,10 @@ fn foobar(func: PFN_void) void {
 
 test "implicit ptr to *c_void" {
     var a: u32 = 1;
-    var ptr: *c_void = &a;
+    var ptr: *align(@alignOf(u32)) c_void = &a;
     var b: *u32 = @ptrCast(*u32, ptr);
     expect(b.* == 1);
-    var ptr2: ?*c_void = &a;
+    var ptr2: ?*align(@alignOf(u32)) c_void = &a;
     var c: *u32 = @ptrCast(*u32, ptr2.?);
     expect(c.* == 1);
 }
@@ -509,6 +486,17 @@ test "@intToEnum passed a comptime_int to an enum with one item" {
     };
     const x = @intToEnum(E, 0);
     expect(x == E.A);
+}
+
+test "@intToEnum runtime to  an extern enum with duplicate values" {
+    const E = extern enum(u8) {
+        A = 1,
+        B = 1,
+    };
+    var a: u8 = 1;
+    var x = @intToEnum(E, a);
+    expect(x == E.A);
+    expect(x == E.B);
 }
 
 test "@intCast to u0 and use the result" {
@@ -767,4 +755,72 @@ test "variable initialization uses result locations properly with regards to the
     var b = true;
     const x: i32 = if (b) 1 else 2;
     expect(x == 1);
+}
+
+test "cast between [*c]T and ?[*:0]T on fn parameter" {
+    const S = struct {
+        const Handler = ?extern fn ([*c]const u8) void;
+        fn addCallback(handler: Handler) void {}
+
+        fn myCallback(cstr: ?[*:0]const u8) callconv(.C) void {}
+
+        fn doTheTest() void {
+            addCallback(myCallback);
+        }
+    };
+    S.doTheTest();
+}
+
+test "cast between C pointer with different but compatible types" {
+    const S = struct {
+        fn foo(arg: [*]c_ushort) u16 {
+            return arg[0];
+        }
+        fn doTheTest() void {
+            var x = [_]u16{ 4, 2, 1, 3 };
+            expect(foo(@ptrCast([*]u16, &x)) == 4);
+        }
+    };
+    S.doTheTest();
+}
+
+var global_struct: struct { f0: usize } = undefined;
+
+test "assignment to optional pointer result loc" {
+    var foo: struct { ptr: ?*c_void } = .{ .ptr = &global_struct };
+    expect(foo.ptr.? == @ptrCast(*c_void, &global_struct));
+}
+
+test "peer type resolve string lit with sentinel-terminated mutable slice" {
+    var array: [4:0]u8 = undefined;
+    array[4] = 0; // TODO remove this when #4372 is solved
+    var slice: [:0]u8 = array[0..4 :0];
+    comptime expect(@TypeOf(slice, "hi") == [:0]const u8);
+    comptime expect(@TypeOf("hi", slice) == [:0]const u8);
+}
+
+test "peer type resolve array pointers, one of them const" {
+    var array1: [4]u8 = undefined;
+    const array2: [5]u8 = undefined;
+    comptime expect(@TypeOf(&array1, &array2) == []const u8);
+    comptime expect(@TypeOf(&array2, &array1) == []const u8);
+}
+
+test "peer type resolve array pointer and unknown pointer" {
+    const const_array: [4]u8 = undefined;
+    var array: [4]u8 = undefined;
+    var const_ptr: [*]const u8 = undefined;
+    var ptr: [*]u8 = undefined;
+
+    comptime expect(@TypeOf(&array, ptr) == [*]u8);
+    comptime expect(@TypeOf(ptr, &array) == [*]u8);
+
+    comptime expect(@TypeOf(&const_array, ptr) == [*]const u8);
+    comptime expect(@TypeOf(ptr, &const_array) == [*]const u8);
+
+    comptime expect(@TypeOf(&array, const_ptr) == [*]const u8);
+    comptime expect(@TypeOf(const_ptr, &array) == [*]const u8);
+    
+    comptime expect(@TypeOf(&const_array, const_ptr) == [*]const u8);
+    comptime expect(@TypeOf(const_ptr, &const_array) == [*]const u8);
 }

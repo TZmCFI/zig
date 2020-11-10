@@ -1,16 +1,14 @@
 const std = @import("std");
+const builtin = std.builtin;
 const debug = std.debug;
 const warn = debug.warn;
 const build = std.build;
-pub const Target = build.Target;
-pub const CrossTarget = build.CrossTarget;
-const Buffer = std.Buffer;
+const CrossTarget = std.zig.CrossTarget;
 const io = std.io;
 const fs = std.fs;
 const mem = std.mem;
 const fmt = std.fmt;
 const ArrayList = std.ArrayList;
-const builtin = @import("builtin");
 const Mode = builtin.Mode;
 const LibExeObjStep = build.LibExeObjStep;
 
@@ -31,243 +29,255 @@ pub const RunTranslatedCContext = @import("src/run_translated_c.zig").RunTransla
 pub const CompareOutputContext = @import("src/compare_output.zig").CompareOutputContext;
 
 const TestTarget = struct {
-    target: Target = .Native,
+    target: CrossTarget = @as(CrossTarget, .{}),
     mode: builtin.Mode = .Debug,
     link_libc: bool = false,
     single_threaded: bool = false,
     disable_native: bool = false,
 };
 
-const test_targets = [_]TestTarget{
-    TestTarget{},
-    TestTarget{
-        .link_libc = true,
-    },
-    TestTarget{
-        .single_threaded = true,
-    },
+const test_targets = blk: {
+    // getBaselineCpuFeatures calls populateDependencies which has a O(N ^ 2) algorithm
+    // (where N is roughly 160, which technically makes it O(1), but it adds up to a
+    // lot of branches)
+    @setEvalBranchQuota(50000);
+    break :blk [_]TestTarget{
+        TestTarget{},
+        TestTarget{
+            .link_libc = true,
+        },
+        TestTarget{
+            .single_threaded = true,
+        },
 
-    TestTarget{
-        .target = Target{
-            .Cross = CrossTarget{
-                .os = .linux,
-                .arch = .x86_64,
+        TestTarget{
+            .target = .{
+                .cpu_arch = .x86_64,
+                .os_tag = .linux,
                 .abi = .none,
             },
         },
-    },
-    TestTarget{
-        .target = Target{
-            .Cross = CrossTarget{
-                .os = .linux,
-                .arch = .x86_64,
+        TestTarget{
+            .target = .{
+                .cpu_arch = .x86_64,
+                .os_tag = .linux,
                 .abi = .gnu,
             },
+            .link_libc = true,
         },
-        .link_libc = true,
-    },
-    TestTarget{
-        .target = Target{
-            .Cross = CrossTarget{
-                .os = .linux,
-                .arch = .x86_64,
+        TestTarget{
+            .target = .{
+                .cpu_arch = .x86_64,
+                .os_tag = .linux,
                 .abi = .musl,
             },
+            .link_libc = true,
         },
-        .link_libc = true,
-    },
 
-    TestTarget{
-        .target = Target{
-            .Cross = CrossTarget{
-                .os = .linux,
-                .arch = .i386,
+        TestTarget{
+            .target = .{
+                .cpu_arch = .i386,
+                .os_tag = .linux,
                 .abi = .none,
             },
         },
-    },
-    TestTarget{
-        .target = Target{
-            .Cross = CrossTarget{
-                .os = .linux,
-                .arch = .i386,
+        TestTarget{
+            .target = .{
+                .cpu_arch = .i386,
+                .os_tag = .linux,
                 .abi = .musl,
             },
+            .link_libc = true,
         },
-        .link_libc = true,
-    },
+        // https://github.com/ziglang/zig/issues/4926
+        //TestTarget{
+        //    .target = .{
+        //        .cpu_arch = .i386,
+        //        .os_tag = .linux,
+        //        .abi = .gnu,
+        //    },
+        //    .link_libc = true,
+        //},
 
-    TestTarget{
-        .target = Target{
-            .Cross = CrossTarget{
-                .os = .linux,
-                .arch = builtin.Arch{ .aarch64 = builtin.Arch.Arm64.v8_5a },
+        TestTarget{
+            .target = .{
+                .cpu_arch = .aarch64,
+                .os_tag = .linux,
                 .abi = .none,
             },
         },
-    },
-    TestTarget{
-        .target = Target{
-            .Cross = CrossTarget{
-                .os = .linux,
-                .arch = builtin.Arch{ .aarch64 = builtin.Arch.Arm64.v8_5a },
+        TestTarget{
+            .target = .{
+                .cpu_arch = .aarch64,
+                .os_tag = .linux,
                 .abi = .musl,
             },
+            .link_libc = true,
         },
-        .link_libc = true,
-    },
-    TestTarget{
-        .target = Target{
-            .Cross = CrossTarget{
-                .os = .linux,
-                .arch = builtin.Arch{ .aarch64 = builtin.Arch.Arm64.v8_5a },
+        TestTarget{
+            .target = .{
+                .cpu_arch = .aarch64,
+                .os_tag = .linux,
                 .abi = .gnu,
             },
+            .link_libc = true,
         },
-        .link_libc = true,
-    },
 
-    TestTarget{
-        .target = Target{
-            .Cross = CrossTarget{
-                .os = .linux,
-                .arch = builtin.Arch{ .arm = builtin.Arch.Arm32.v8_5a },
+        TestTarget{
+            .target = CrossTarget.parse(.{
+                .arch_os_abi = "arm-linux-none",
+                .cpu_features = "generic+v8a",
+            }) catch unreachable,
+        },
+        TestTarget{
+            .target = CrossTarget.parse(.{
+                .arch_os_abi = "arm-linux-musleabihf",
+                .cpu_features = "generic+v8a",
+            }) catch unreachable,
+            .link_libc = true,
+        },
+        // https://github.com/ziglang/zig/issues/3287
+        //TestTarget{
+        //    .target = CrossTarget.parse(.{
+        //        .arch_os_abi = "arm-linux-gnueabihf",
+        //        .cpu_features = "generic+v8a",
+        //    }) catch unreachable,
+        //    .link_libc = true,
+        //},
+
+        TestTarget{
+            .target = .{
+                .cpu_arch = .mipsel,
+                .os_tag = .linux,
                 .abi = .none,
             },
         },
-    },
-    TestTarget{
-        .target = Target{
-            .Cross = CrossTarget{
-                .os = .linux,
-                .arch = builtin.Arch{ .arm = builtin.Arch.Arm32.v8_5a },
-                .abi = .musleabihf,
-            },
-        },
-        .link_libc = true,
-    },
-    // TODO https://github.com/ziglang/zig/issues/3287
-    //TestTarget{
-    //    .target = Target{
-    //        .Cross = CrossTarget{
-    //            .os = .linux,
-    //            .arch = builtin.Arch{ .arm = builtin.Arch.Arm32.v8_5a },
-    //            .abi = .gnueabihf,
-    //        },
-    //    },
-    //    .link_libc = true,
-    //},
-
-    TestTarget{
-        .target = Target{
-            .Cross = CrossTarget{
-                .os = .linux,
-                .arch = .mipsel,
-                .abi = .none,
-            },
-        },
-    },
-    TestTarget{
-        .target = Target{
-            .Cross = CrossTarget{
-                .os = .linux,
-                .arch = .mipsel,
+        TestTarget{
+            .target = .{
+                .cpu_arch = .mipsel,
+                .os_tag = .linux,
                 .abi = .musl,
             },
+            .link_libc = true,
         },
-        .link_libc = true,
-    },
+        // https://github.com/ziglang/zig/issues/4927
+        //TestTarget{
+        //    .target = .{
+        //        .cpu_arch = .mipsel,
+        //        .os_tag = .linux,
+        //        .abi = .gnu,
+        //    },
+        //    .link_libc = true,
+        //},
 
-    TestTarget{
-        .target = Target{
-            .Cross = CrossTarget{
-                .os = .macosx,
-                .arch = .x86_64,
-                .abi = .gnu,
+        TestTarget{
+            .target = .{
+                .cpu_arch = .riscv64,
+                .os_tag = .linux,
+                .abi = .none,
             },
         },
-        // TODO https://github.com/ziglang/zig/issues/3295
-        .disable_native = true,
-    },
 
-    TestTarget{
-        .target = Target{
-            .Cross = CrossTarget{
-                .os = .windows,
-                .arch = .i386,
+        TestTarget{
+            .target = .{
+                .cpu_arch = .riscv64,
+                .os_tag = .linux,
+                .abi = .musl,
+            },
+            .link_libc = true,
+        },
+
+        // https://github.com/ziglang/zig/issues/3340
+        //TestTarget{
+        //    .target = .{
+        //        .cpu_arch = .riscv64,
+        //        .os = .linux,
+        //        .abi = .gnu,
+        //    },
+        //    .link_libc = true,
+        //},
+
+        TestTarget{
+            .target = .{
+                .cpu_arch = .x86_64,
+                .os_tag = .macosx,
+                .abi = .gnu,
+            },
+            // https://github.com/ziglang/zig/issues/3295
+            .disable_native = true,
+        },
+
+        TestTarget{
+            .target = .{
+                .cpu_arch = .i386,
+                .os_tag = .windows,
                 .abi = .msvc,
             },
         },
-    },
 
-    TestTarget{
-        .target = Target{
-            .Cross = CrossTarget{
-                .os = .windows,
-                .arch = .x86_64,
+        TestTarget{
+            .target = .{
+                .cpu_arch = .x86_64,
+                .os_tag = .windows,
                 .abi = .msvc,
             },
         },
-    },
 
-    TestTarget{
-        .target = Target{
-            .Cross = CrossTarget{
-                .os = .windows,
-                .arch = .i386,
+        TestTarget{
+            .target = .{
+                .cpu_arch = .i386,
+                .os_tag = .windows,
                 .abi = .gnu,
             },
+            .link_libc = true,
         },
-        .link_libc = true,
-    },
 
-    TestTarget{
-        .target = Target{
-            .Cross = CrossTarget{
-                .os = .windows,
-                .arch = .x86_64,
+        TestTarget{
+            .target = .{
+                .cpu_arch = .x86_64,
+                .os_tag = .windows,
                 .abi = .gnu,
             },
+            .link_libc = true,
         },
-        .link_libc = true,
-    },
 
-    // Do the release tests last because they take a long time
-    TestTarget{
-        .mode = .ReleaseFast,
-    },
-    TestTarget{
-        .link_libc = true,
-        .mode = .ReleaseFast,
-    },
-    TestTarget{
-        .mode = .ReleaseFast,
-        .single_threaded = true,
-    },
+        // Do the release tests last because they take a long time
+        TestTarget{
+            .mode = .ReleaseFast,
+        },
+        TestTarget{
+            .link_libc = true,
+            .mode = .ReleaseFast,
+        },
+        TestTarget{
+            .mode = .ReleaseFast,
+            .single_threaded = true,
+        },
 
-    TestTarget{
-        .mode = .ReleaseSafe,
-    },
-    TestTarget{
-        .link_libc = true,
-        .mode = .ReleaseSafe,
-    },
-    TestTarget{
-        .mode = .ReleaseSafe,
-        .single_threaded = true,
-    },
+        TestTarget{
+            .mode = .ReleaseSafe,
+        },
+        TestTarget{
+            .link_libc = true,
+            .mode = .ReleaseSafe,
+        },
+        TestTarget{
+            .mode = .ReleaseSafe,
+            .single_threaded = true,
+        },
 
-    TestTarget{
-        .mode = .ReleaseSmall,
-    },
-    TestTarget{
-        .link_libc = true,
-        .mode = .ReleaseSmall,
-    },
-    TestTarget{
-        .mode = .ReleaseSmall,
-        .single_threaded = true,
-    },
+        TestTarget{
+            .mode = .ReleaseSmall,
+        },
+        TestTarget{
+            .link_libc = true,
+            .mode = .ReleaseSmall,
+        },
+        TestTarget{
+            .mode = .ReleaseSmall,
+            .single_threaded = true,
+        },
+    };
 };
 
 const max_stdout_size = 1 * 1024 * 1024; // 1 MB
@@ -435,13 +445,13 @@ pub fn addPkgTests(
     const step = b.step(b.fmt("test-{}", .{name}), desc);
 
     for (test_targets) |test_target| {
-        if (skip_non_native and test_target.target != .Native)
+        if (skip_non_native and !test_target.target.isNative())
             continue;
 
         if (skip_libc and test_target.link_libc)
             continue;
 
-        if (test_target.link_libc and test_target.target.osRequiresLibC()) {
+        if (test_target.link_libc and test_target.target.getOs().requiresLibC()) {
             // This would be a redundant test.
             continue;
         }
@@ -451,8 +461,8 @@ pub fn addPkgTests(
 
         const ArchTag = @TagType(builtin.Arch);
         if (test_target.disable_native and
-            test_target.target.getOs() == builtin.os and
-            @as(ArchTag, test_target.target.getArch()) == @as(ArchTag, builtin.arch))
+            test_target.target.getOsTag() == std.Target.current.os.tag and
+            test_target.target.getCpuArch() == std.Target.current.cpu.arch)
         {
             continue;
         }
@@ -462,17 +472,14 @@ pub fn addPkgTests(
         } else false;
         if (!want_this_mode) continue;
 
-        const libc_prefix = if (test_target.target.osRequiresLibC())
+        const libc_prefix = if (test_target.target.getOs().requiresLibC())
             ""
         else if (test_target.link_libc)
             "c"
         else
             "bare";
 
-        const triple_prefix = if (test_target.target == .Native)
-            @as([]const u8, "native")
-        else
-            test_target.target.zigTripleNoSubArch(b.allocator) catch unreachable;
+        const triple_prefix = test_target.target.zigTriple(b.allocator) catch unreachable;
 
         const these_tests = b.addTest(root_src);
         const single_threaded_txt = if (test_target.single_threaded) "single" else "multi";
@@ -486,7 +493,7 @@ pub fn addPkgTests(
         these_tests.single_threaded = test_target.single_threaded;
         these_tests.setFilter(test_filter);
         these_tests.setBuildMode(test_target.mode);
-        these_tests.setTheTarget(test_target.target);
+        these_tests.setTarget(test_target.target);
         if (test_target.link_libc) {
             these_tests.linkSystemLibrary("c");
         }
@@ -590,7 +597,7 @@ pub const StackTracesContext = struct {
 
             warn("Test {}/{} {}...", .{ self.test_index + 1, self.context.test_index, self.name });
 
-            const child = std.ChildProcess.init(args.toSliceConst(), b.allocator) catch unreachable;
+            const child = std.ChildProcess.init(args.span(), b.allocator) catch unreachable;
             defer child.deinit();
 
             child.stdin_behavior = .Ignore;
@@ -598,16 +605,15 @@ pub const StackTracesContext = struct {
             child.stderr_behavior = .Pipe;
             child.env_map = b.env_map;
 
+            if (b.verbose) {
+                printInvocation(args.span());
+            }
             child.spawn() catch |err| debug.panic("Unable to spawn {}: {}\n", .{ full_exe_path, @errorName(err) });
 
-            var stdout = Buffer.initNull(b.allocator);
-            var stderr = Buffer.initNull(b.allocator);
-
-            var stdout_file_in_stream = child.stdout.?.inStream();
-            var stderr_file_in_stream = child.stderr.?.inStream();
-
-            stdout_file_in_stream.stream.readAllBuffer(&stdout, max_stdout_size) catch unreachable;
-            stderr_file_in_stream.stream.readAllBuffer(&stderr, max_stdout_size) catch unreachable;
+            const stdout = child.stdout.?.inStream().readAllAlloc(b.allocator, max_stdout_size) catch unreachable;
+            defer b.allocator.free(stdout);
+            var stderr = child.stderr.?.inStream().readAllAlloc(b.allocator, max_stdout_size) catch unreachable;
+            defer b.allocator.free(stderr);
 
             const term = child.wait() catch |err| {
                 debug.panic("Unable to spawn {}: {}\n", .{ full_exe_path, @errorName(err) });
@@ -622,23 +628,23 @@ pub const StackTracesContext = struct {
                             code,
                             expect_code,
                         });
-                        printInvocation(args.toSliceConst());
+                        printInvocation(args.span());
                         return error.TestFailed;
                     }
                 },
                 .Signal => |signum| {
                     warn("Process {} terminated on signal {}\n", .{ full_exe_path, signum });
-                    printInvocation(args.toSliceConst());
+                    printInvocation(args.span());
                     return error.TestFailed;
                 },
                 .Stopped => |signum| {
                     warn("Process {} stopped on signal {}\n", .{ full_exe_path, signum });
-                    printInvocation(args.toSliceConst());
+                    printInvocation(args.span());
                     return error.TestFailed;
                 },
                 .Unknown => |code| {
                     warn("Process {} terminated unexpectedly with error code {}\n", .{ full_exe_path, code });
-                    printInvocation(args.toSliceConst());
+                    printInvocation(args.span());
                     return error.TestFailed;
                 },
             }
@@ -648,34 +654,33 @@ pub const StackTracesContext = struct {
             // - replace address with symbolic string
             // - skip empty lines
             const got: []const u8 = got_result: {
-                var buf = try Buffer.initSize(b.allocator, 0);
+                var buf = ArrayList(u8).init(b.allocator);
                 defer buf.deinit();
-                var bytes = stderr.toSliceConst();
-                if (bytes.len != 0 and bytes[bytes.len - 1] == '\n') bytes = bytes[0 .. bytes.len - 1];
-                var it = mem.separate(bytes, "\n");
+                if (stderr.len != 0 and stderr[stderr.len - 1] == '\n') stderr = stderr[0 .. stderr.len - 1];
+                var it = mem.split(stderr, "\n");
                 process_lines: while (it.next()) |line| {
                     if (line.len == 0) continue;
                     const delims = [_][]const u8{ ":", ":", ":", " in " };
                     var marks = [_]usize{0} ** 4;
                     // offset search past `[drive]:` on windows
-                    var pos: usize = if (builtin.os == .windows) 2 else 0;
+                    var pos: usize = if (std.Target.current.os.tag == .windows) 2 else 0;
                     for (delims) |delim, i| {
                         marks[i] = mem.indexOfPos(u8, line, pos, delim) orelse {
-                            try buf.append(line);
-                            try buf.append("\n");
+                            try buf.appendSlice(line);
+                            try buf.appendSlice("\n");
                             continue :process_lines;
                         };
                         pos = marks[i] + delim.len;
                     }
                     pos = mem.lastIndexOfScalar(u8, line[0..marks[0]], fs.path.sep) orelse {
-                        try buf.append(line);
-                        try buf.append("\n");
+                        try buf.appendSlice(line);
+                        try buf.appendSlice("\n");
                         continue :process_lines;
                     };
-                    try buf.append(line[pos + 1 .. marks[2] + delims[2].len]);
-                    try buf.append(" [address]");
-                    try buf.append(line[marks[3]..]);
-                    try buf.append("\n");
+                    try buf.appendSlice(line[pos + 1 .. marks[2] + delims[2].len]);
+                    try buf.appendSlice(" [address]");
+                    try buf.appendSlice(line[marks[3]..]);
+                    try buf.appendSlice("\n");
                 }
                 break :got_result buf.toOwnedSlice();
             };
@@ -711,7 +716,7 @@ pub const CompileErrorContext = struct {
         link_libc: bool,
         is_exe: bool,
         is_test: bool,
-        target: Target = .Native,
+        target: CrossTarget = CrossTarget{},
 
         const SourceFile = struct {
             filename: []const u8,
@@ -745,7 +750,7 @@ pub const CompileErrorContext = struct {
             const source_file = "tmp.zig";
 
             fn init(input: []const u8) ErrLineIter {
-                return ErrLineIter{ .lines = mem.separate(input, "\n") };
+                return ErrLineIter{ .lines = mem.split(input, "\n") };
             }
 
             fn next(self: *ErrLineIter) ?[]const u8 {
@@ -794,7 +799,7 @@ pub const CompileErrorContext = struct {
             } else {
                 try zig_args.append("build-obj");
             }
-            const root_src_basename = self.case.sources.toSliceConst()[0].filename;
+            const root_src_basename = self.case.sources.span()[0].filename;
             try zig_args.append(self.write_src.getOutputPath(root_src_basename));
 
             zig_args.append("--name") catch unreachable;
@@ -803,12 +808,9 @@ pub const CompileErrorContext = struct {
             zig_args.append("--output-dir") catch unreachable;
             zig_args.append(b.pathFromRoot(b.cache_root)) catch unreachable;
 
-            switch (self.case.target) {
-                .Native => {},
-                .Cross => {
-                    try zig_args.append("-target");
-                    try zig_args.append(try self.case.target.zigTriple(b.allocator));
-                },
+            if (!self.case.target.isNative()) {
+                try zig_args.append("-target");
+                try zig_args.append(try self.case.target.zigTriple(b.allocator));
             }
 
             switch (self.build_mode) {
@@ -821,10 +823,10 @@ pub const CompileErrorContext = struct {
             warn("Test {}/{} {}...", .{ self.test_index + 1, self.context.test_index, self.name });
 
             if (b.verbose) {
-                printInvocation(zig_args.toSliceConst());
+                printInvocation(zig_args.span());
             }
 
-            const child = std.ChildProcess.init(zig_args.toSliceConst(), b.allocator) catch unreachable;
+            const child = std.ChildProcess.init(zig_args.span(), b.allocator) catch unreachable;
             defer child.deinit();
 
             child.env_map = b.env_map;
@@ -834,14 +836,11 @@ pub const CompileErrorContext = struct {
 
             child.spawn() catch |err| debug.panic("Unable to spawn {}: {}\n", .{ zig_args.items[0], @errorName(err) });
 
-            var stdout_buf = Buffer.initNull(b.allocator);
-            var stderr_buf = Buffer.initNull(b.allocator);
+            var stdout_buf = ArrayList(u8).init(b.allocator);
+            var stderr_buf = ArrayList(u8).init(b.allocator);
 
-            var stdout_file_in_stream = child.stdout.?.inStream();
-            var stderr_file_in_stream = child.stderr.?.inStream();
-
-            stdout_file_in_stream.stream.readAllBuffer(&stdout_buf, max_stdout_size) catch unreachable;
-            stderr_file_in_stream.stream.readAllBuffer(&stderr_buf, max_stdout_size) catch unreachable;
+            child.stdout.?.inStream().readAllArrayList(&stdout_buf, max_stdout_size) catch unreachable;
+            child.stderr.?.inStream().readAllArrayList(&stderr_buf, max_stdout_size) catch unreachable;
 
             const term = child.wait() catch |err| {
                 debug.panic("Unable to spawn {}: {}\n", .{ zig_args.items[0], @errorName(err) });
@@ -849,19 +848,19 @@ pub const CompileErrorContext = struct {
             switch (term) {
                 .Exited => |code| {
                     if (code == 0) {
-                        printInvocation(zig_args.toSliceConst());
+                        printInvocation(zig_args.span());
                         return error.CompilationIncorrectlySucceeded;
                     }
                 },
                 else => {
                     warn("Process {} terminated unexpectedly\n", .{b.zig_exe});
-                    printInvocation(zig_args.toSliceConst());
+                    printInvocation(zig_args.span());
                     return error.TestFailed;
                 },
             }
 
-            const stdout = stdout_buf.toSliceConst();
-            const stderr = stderr_buf.toSliceConst();
+            const stdout = stdout_buf.span();
+            const stderr = stderr_buf.span();
 
             if (stdout.len != 0) {
                 warn(
@@ -880,22 +879,22 @@ pub const CompileErrorContext = struct {
                 var err_iter = ErrLineIter.init(stderr);
                 var i: usize = 0;
                 ok = while (err_iter.next()) |line| : (i += 1) {
-                    if (i >= self.case.expected_errors.len) break false;
-                    const expected = self.case.expected_errors.at(i);
+                    if (i >= self.case.expected_errors.items.len) break false;
+                    const expected = self.case.expected_errors.items[i];
                     if (mem.indexOf(u8, line, expected) == null) break false;
                     continue;
                 } else true;
 
-                ok = ok and i == self.case.expected_errors.len;
+                ok = ok and i == self.case.expected_errors.items.len;
 
                 if (!ok) {
                     warn("\n======== Expected these compile errors: ========\n", .{});
-                    for (self.case.expected_errors.toSliceConst()) |expected| {
+                    for (self.case.expected_errors.span()) |expected| {
                         warn("{}\n", .{expected});
                     }
                 }
             } else {
-                for (self.case.expected_errors.toSliceConst()) |expected| {
+                for (self.case.expected_errors.span()) |expected| {
                     if (mem.indexOf(u8, stderr, expected) == null) {
                         warn(
                             \\
@@ -995,7 +994,7 @@ pub const CompileErrorContext = struct {
             if (mem.indexOf(u8, annotated_case_name, filter) == null) return;
         }
         const write_src = b.addWriteFiles();
-        for (case.sources.toSliceConst()) |src_file| {
+        for (case.sources.span()) |src_file| {
             write_src.add(src_file.filename, src_file.source);
         }
 
@@ -1042,7 +1041,7 @@ pub const StandaloneContext = struct {
             zig_args.append("--verbose") catch unreachable;
         }
 
-        const run_cmd = b.addSystemCommand(zig_args.toSliceConst());
+        const run_cmd = b.addSystemCommand(zig_args.span());
 
         const log_step = b.addLog("PASS {}\n", .{annotated_case_name});
         log_step.step.dependOn(&run_cmd.step);
@@ -1142,7 +1141,7 @@ pub const GenHContext = struct {
             const full_h_path = self.obj.getOutputHPath();
             const actual_h = try io.readFileAlloc(b.allocator, full_h_path);
 
-            for (self.case.expected_lines.toSliceConst()) |expected_line| {
+            for (self.case.expected_lines.span()) |expected_line| {
                 if (mem.indexOf(u8, actual_h, expected_line) == null) {
                     warn(
                         \\
@@ -1203,7 +1202,7 @@ pub const GenHContext = struct {
         }
 
         const write_src = b.addWriteFiles();
-        for (case.sources.toSliceConst()) |src_file| {
+        for (case.sources.span()) |src_file| {
             write_src.add(src_file.filename, src_file.source);
         }
 

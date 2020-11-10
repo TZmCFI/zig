@@ -18,6 +18,8 @@ pub usingnamespace switch (builtin.arch) {
     else => struct {},
 };
 
+pub usingnamespace @import("linux/netlink.zig");
+
 const is_mips = builtin.arch.isMIPS();
 
 pub const pid_t = i32;
@@ -29,6 +31,10 @@ pub const clock_t = isize;
 pub const NAME_MAX = 255;
 pub const PATH_MAX = 4096;
 pub const IOV_MAX = 1024;
+
+/// Largest hardware address length
+/// e.g. a mac address is a type of hardware address
+pub const MAX_ADDR_LEN = 32;
 
 pub const STDIN_FILENO = 0;
 pub const STDOUT_FILENO = 1;
@@ -82,11 +88,29 @@ pub const FUTEX_PRIVATE_FLAG = 128;
 
 pub const FUTEX_CLOCK_REALTIME = 256;
 
-pub const PROT_NONE = 0;
-pub const PROT_READ = 1;
-pub const PROT_WRITE = 2;
-pub const PROT_EXEC = 4;
+/// page can not be accessed
+pub const PROT_NONE = 0x0;
+
+/// page can be read
+pub const PROT_READ = 0x1;
+
+/// page can be written
+pub const PROT_WRITE = 0x2;
+
+/// page can be executed
+pub const PROT_EXEC = 0x4;
+
+/// page may be used for atomic ops
+pub const PROT_SEM = switch (builtin.arch) {
+    // TODO: also xtensa
+    .mips, .mipsel, .mips64, .mips64el => 0x10,
+    else => 0x8,
+};
+
+/// mprotect flag: extend change to start of growsdown vma
 pub const PROT_GROWSDOWN = 0x01000000;
+
+/// mprotect flag: extend change to end of growsup vma
 pub const PROT_GROWSUP = 0x02000000;
 
 /// Share changes
@@ -129,6 +153,8 @@ pub const MAP_FIXED_NOREPLACE = 0x100000;
 
 /// For anonymous mmap, memory could be uninitialized
 pub const MAP_UNINITIALIZED = 0x4000000;
+
+pub const FD_CLOEXEC = 1;
 
 pub const F_OK = 0;
 pub const X_OK = 1;
@@ -604,6 +630,16 @@ pub const CLONE_NEWPID = 0x20000000;
 pub const CLONE_NEWNET = 0x40000000;
 pub const CLONE_IO = 0x80000000;
 
+// Flags for the clone3() syscall.
+
+/// Clear any signal handler and reset to SIG_DFL.
+pub const CLONE_CLEAR_SIGHAND = 0x100000000;
+
+// cloning flags intersect with CSIGNAL so can be used with unshare and clone3 syscalls only.
+
+/// New time namespace
+pub const CLONE_NEWTIME = 0x00000080;
+
 pub const EFD_SEMAPHORE = 1;
 pub const EFD_CLOEXEC = O_CLOEXEC;
 pub const EFD_NONBLOCK = O_NONBLOCK;
@@ -777,13 +813,13 @@ pub const app_mask: sigset_t = [2]u32{ 0xfffffffc, 0x7fffffff } ++ [_]u32{0xffff
 pub const k_sigaction = if (is_mips)
     extern struct {
         flags: usize,
-        sigaction: ?extern fn (i32, *siginfo_t, *c_void) void,
+        sigaction: ?extern fn (i32, *siginfo_t, ?*c_void) void,
         mask: [4]u32,
         restorer: extern fn () void,
     }
 else
     extern struct {
-        sigaction: ?extern fn (i32, *siginfo_t, *c_void) void,
+        sigaction: ?extern fn (i32, *siginfo_t, ?*c_void) void,
         flags: usize,
         restorer: extern fn () void,
         mask: [2]u32,
@@ -791,15 +827,17 @@ else
 
 /// Renamed from `sigaction` to `Sigaction` to avoid conflict with the syscall.
 pub const Sigaction = extern struct {
-    sigaction: ?extern fn (i32, *siginfo_t, *c_void) void,
+    pub const sigaction_fn = fn (i32, *siginfo_t, ?*c_void) callconv(.C) void;
+    sigaction: ?sigaction_fn,
     mask: sigset_t,
     flags: u32,
     restorer: ?extern fn () void = null,
 };
 
-pub const SIG_ERR = @intToPtr(extern fn (i32, *siginfo_t, *c_void) void, maxInt(usize));
-pub const SIG_DFL = @intToPtr(?extern fn (i32, *siginfo_t, *c_void) void, 0);
-pub const SIG_IGN = @intToPtr(extern fn (i32, *siginfo_t, *c_void) void, 1);
+pub const SIG_ERR = @intToPtr(?Sigaction.sigaction_fn, maxInt(usize));
+pub const SIG_DFL = @intToPtr(?Sigaction.sigaction_fn, 0);
+pub const SIG_IGN = @intToPtr(?Sigaction.sigaction_fn, 1);
+
 pub const empty_sigset = [_]u32{0} ** sigset_t.len;
 
 pub const in_port_t = u16;
@@ -999,7 +1037,7 @@ pub const dl_phdr_info = extern struct {
 
 pub const CPU_SETSIZE = 128;
 pub const cpu_set_t = [CPU_SETSIZE / @sizeOf(usize)]usize;
-pub const cpu_count_t = @IntType(false, std.math.log2(CPU_SETSIZE * 8));
+pub const cpu_count_t = std.meta.IntType(false, std.math.log2(CPU_SETSIZE * 8));
 
 pub fn CPU_COUNT(set: cpu_set_t) cpu_count_t {
     var sum: cpu_count_t = 0;
@@ -1112,7 +1150,8 @@ pub const io_uring_params = extern struct {
     sq_thread_cpu: u32,
     sq_thread_idle: u32,
     features: u32,
-    resv: [4]u32,
+    wq_fd: u32,
+    resv: [3]u32,
     sq_off: io_sqring_offsets,
     cq_off: io_cqring_offsets,
 };
@@ -1120,17 +1159,30 @@ pub const io_uring_params = extern struct {
 // io_uring_params.features flags
 
 pub const IORING_FEAT_SINGLE_MMAP = 1 << 0;
+pub const IORING_FEAT_NODROP = 1 << 1;
+pub const IORING_FEAT_SUBMIT_STABLE = 1 << 2;
+pub const IORING_FEAT_RW_CUR_POS = 1 << 3;
+pub const IORING_FEAT_CUR_PERSONALITY = 1 << 4;
 
 // io_uring_params.flags
 
 /// io_context is polled
-pub const IORING_SETUP_IOPOLL = (1 << 0);
+pub const IORING_SETUP_IOPOLL = 1 << 0;
 
 /// SQ poll thread
-pub const IORING_SETUP_SQPOLL = (1 << 1);
+pub const IORING_SETUP_SQPOLL = 1 << 1;
 
 /// sq_thread_cpu is valid
-pub const IORING_SETUP_SQ_AFF = (1 << 2);
+pub const IORING_SETUP_SQ_AFF = 1 << 2;
+
+/// app defines CQ size
+pub const IORING_SETUP_CQSIZE = 1 << 3;
+
+/// clamp SQ/CQ ring sizes
+pub const IORING_SETUP_CLAMP = 1 << 4;
+
+/// attach to existing wq
+pub const IORING_SETUP_ATTACH_WQ = 1 << 5;
 
 pub const io_sqring_offsets = extern struct {
     /// offset of ring head
@@ -1174,56 +1226,122 @@ pub const io_cqring_offsets = extern struct {
 };
 
 pub const io_uring_sqe = extern struct {
-    opcode: u8,
-    flags: u8,
-    ioprio: u16,
-    fd: i32,
-    off: u64,
-    addr: u64,
-    len: u32,
     pub const union1 = extern union {
+        off: u64,
+        addr2: u64,
+    };
+
+    pub const union2 = extern union {
         rw_flags: kernel_rwf,
         fsync_flags: u32,
         poll_events: u16,
         sync_range_flags: u32,
         msg_flags: u32,
         timeout_flags: u32,
+        accept_flags: u32,
+        cancel_flags: u32,
+        open_flags: u32,
+        statx_flags: u32,
+        fadvise_flags: u32,
     };
-    union1: union1,
-    user_data: u64,
-    pub const union2 = extern union {
-        buf_index: u16,
+
+    pub const union3 = extern union {
+        struct1: extern struct {
+            /// index into fixed buffers, if used
+            buf_index: u16,
+
+            /// personality to use, if used
+            personality: u16,
+        },
         __pad2: [3]u64,
     };
+    opcode: IORING_OP,
+    flags: u8,
+    ioprio: u16,
+    fd: i32,
+
+    opcode: u8,
+    flags: u8,
+    ioprio: u16,
+    fd: i32,
+
+    union1: union1,
+    addr: u64,
+    len: u32,
+
     union2: union2,
+    user_data: u64,
+
+    union3: union3,
+};
+
+pub const IOSQE_BIT = extern enum {
+    FIXED_FILE,
+    IO_DRAIN,
+    IO_LINK,
+    IO_HARDLINK,
+    ASYNC,
+
+    _,
 };
 
 // io_uring_sqe.flags
 
 /// use fixed fileset
-pub const IOSQE_FIXED_FILE = (1 << 0);
+pub const IOSQE_FIXED_FILE = 1 << IOSQE_BIT.FIXED_FILE;
 
 /// issue after inflight IO
-pub const IOSQE_IO_DRAIN = (1 << 1);
+pub const IOSQE_IO_DRAIN = 1 << IOSQE_BIT.IO_DRAIN;
 
 /// links next sqe
-pub const IOSQE_IO_LINK = (1 << 2);
+pub const IOSQE_IO_LINK = 1 << IOSQE_BIT.IO_LINK;
 
-pub const IORING_OP_NOP = 0;
-pub const IORING_OP_READV = 1;
-pub const IORING_OP_WRITEV = 2;
-pub const IORING_OP_FSYNC = 3;
-pub const IORING_OP_READ_FIXED = 4;
-pub const IORING_OP_WRITE_FIXED = 5;
-pub const IORING_OP_POLL_ADD = 6;
-pub const IORING_OP_POLL_REMOVE = 7;
-pub const IORING_OP_SYNC_FILE_RANGE = 8;
-pub const IORING_OP_SENDMSG = 9;
-pub const IORING_OP_RECVMSG = 10;
-pub const IORING_OP_TIMEOUT = 11;
+/// like LINK, but stronger
+pub const IOSQE_IO_HARDLINK = 1 << IOSQE_BIT.IO_HARDLINK;
+
+/// always go async
+pub const IOSQE_ASYNC = 1 << IOSQE_BIT.ASYNC;
+
+pub const IORING_OP = extern enum(u8) {
+    NOP,
+    READV,
+    WRITEV,
+    FSYNC,
+    READ_FIXED,
+    WRITE_FIXED,
+    POLL_ADD,
+    POLL_REMOVE,
+    SYNC_FILE_RANGE,
+    SENDMSG,
+    RECVMSG,
+    TIMEOUT,
+    TIMEOUT_REMOVE,
+    ACCEPT,
+    ASYNC_CANCEL,
+    LINK_TIMEOUT,
+    CONNECT,
+    FALLOCATE,
+    OPENAT,
+    CLOSE,
+    FILES_UPDATE,
+    STATX,
+    READ,
+    WRITE,
+    FADVISE,
+    MADVISE,
+    SEND,
+    RECV,
+    OPENAT2,
+    EPOLL_CTL,
+
+    _,
+};
 
 // io_uring_sqe.fsync_flags
-pub const IORING_FSYNC_DATASYNC = (1 << 0);
+pub const IORING_FSYNC_DATASYNC = 1 << 0;
+
+// io_uring_sqe.timeout_flags
+pub const IORING_TIMEOUT_ABS = 1 << 0;
 
 // IO completion data structure (Completion Queue Entry)
 pub const io_uring_cqe = extern struct {
@@ -1240,24 +1358,65 @@ pub const IORING_OFF_CQ_RING = 0x8000000;
 pub const IORING_OFF_SQES = 0x10000000;
 
 // io_uring_enter flags
-pub const IORING_ENTER_GETEVENTS = (1 << 0);
-pub const IORING_ENTER_SQ_WAKEUP = (1 << 1);
+pub const IORING_ENTER_GETEVENTS = 1 << 0;
+pub const IORING_ENTER_SQ_WAKEUP = 1 << 1;
 
 // io_uring_register opcodes and arguments
-pub const IORING_REGISTER_BUFFERS = 0;
-pub const IORING_UNREGISTER_BUFFERS = 1;
-pub const IORING_REGISTER_FILES = 2;
-pub const IORING_UNREGISTER_FILES = 3;
-pub const IORING_REGISTER_EVENTFD = 4;
-pub const IORING_UNREGISTER_EVENTFD = 5;
+pub const IORING_REGISTER = extern enum(u32) {
+    REGISTER_BUFFERS,
+    UNREGISTER_BUFFERS,
+    REGISTER_FILES,
+    UNREGISTER_FILES,
+    REGISTER_EVENTFD,
+    UNREGISTER_EVENTFD,
+    REGISTER_FILES_UPDATE,
+    REGISTER_EVENTFD_ASYNC,
+    REGISTER_PROBE,
+    REGISTER_PERSONALITY,
+    UNREGISTER_PERSONALITY,
+
+    _,
+};
+
+pub const io_uring_files_update = struct {
+    offset: u32,
+    resv: u32,
+    fds: u64,
+};
+
+pub const IO_URING_OP_SUPPORTED = 1 << 0;
+
+pub const io_uring_probe_op = struct {
+    op: IORING_OP,
+
+    resv: u8,
+
+    /// IO_URING_OP_* flags
+    flags: u16,
+
+    resv2: u32,
+};
+
+pub const io_uring_probe = struct {
+    /// last opcode supported
+    last_op: IORING_OP,
+
+    /// Number of io_uring_probe_op following
+    ops_len: u8,
+
+    resv: u16,
+    resv2: u32[3],
+
+    // Followed by up to `ops_len` io_uring_probe_op structures
+};
 
 pub const utsname = extern struct {
-    sysname: [65]u8,
-    nodename: [65]u8,
-    release: [65]u8,
-    version: [65]u8,
-    machine: [65]u8,
-    domainname: [65]u8,
+    sysname: [64:0]u8,
+    nodename: [64:0]u8,
+    release: [64:0]u8,
+    version: [64:0]u8,
+    machine: [64:0]u8,
+    domainname: [64:0]u8,
 };
 pub const HOST_NAME_MAX = 64;
 
@@ -1476,4 +1635,78 @@ pub const rusage = extern struct {
     nvcsw: isize,
     nivcsw: isize,
     __reserved: [16]isize = [1]isize{0} ** 16,
+};
+
+pub const cc_t = u8;
+pub const speed_t = u32;
+pub const tcflag_t = u32;
+
+pub const NCCS = 32;
+
+pub const IGNBRK = 1;
+pub const BRKINT = 2;
+pub const IGNPAR = 4;
+pub const PARMRK = 8;
+pub const INPCK = 16;
+pub const ISTRIP = 32;
+pub const INLCR = 64;
+pub const IGNCR = 128;
+pub const ICRNL = 256;
+pub const IUCLC = 512;
+pub const IXON = 1024;
+pub const IXANY = 2048;
+pub const IXOFF = 4096;
+pub const IMAXBEL = 8192;
+pub const IUTF8 = 16384;
+
+pub const OPOST = 1;
+pub const OLCUC = 2;
+pub const ONLCR = 4;
+pub const OCRNL = 8;
+pub const ONOCR = 16;
+pub const ONLRET = 32;
+pub const OFILL = 64;
+pub const OFDEL = 128;
+pub const VTDLY = 16384;
+pub const VT0 = 0;
+pub const VT1 = 16384;
+
+pub const CSIZE = 48;
+pub const CS5 = 0;
+pub const CS6 = 16;
+pub const CS7 = 32;
+pub const CS8 = 48;
+pub const CSTOPB = 64;
+pub const CREAD = 128;
+pub const PARENB = 256;
+pub const PARODD = 512;
+pub const HUPCL = 1024;
+pub const CLOCAL = 2048;
+
+pub const ISIG = 1;
+pub const ICANON = 2;
+pub const ECHO = 8;
+pub const ECHOE = 16;
+pub const ECHOK = 32;
+pub const ECHONL = 64;
+pub const NOFLSH = 128;
+pub const TOSTOP = 256;
+pub const IEXTEN = 32768;
+
+pub const TCSA = extern enum(c_uint) {
+    NOW,
+    DRAIN,
+    FLUSH,
+    _,
+};
+
+pub const termios = extern struct {
+    iflag: tcflag_t,
+    oflag: tcflag_t,
+    cflag: tcflag_t,
+    lflag: tcflag_t,
+    line: cc_t,
+    cc: [NCCS]cc_t,
+    ispeed: speed_t,
+    ospeed: speed_t,
 };

@@ -7,6 +7,7 @@ pub fn S_ISCHR(m: u32) bool {
 pub const fd_t = c_int;
 pub const pid_t = c_int;
 pub const off_t = c_long;
+pub const mode_t = c_uint;
 
 pub const ENOTSUP = EOPNOTSUPP;
 pub const EWOULDBLOCK = EAGAIN;
@@ -137,8 +138,10 @@ pub const MAP_SIZEALIGN = 262144;
 
 pub const PATH_MAX = 1024;
 
+pub const ino_t = c_ulong;
+
 pub const Stat = extern struct {
-    ino: c_ulong,
+    ino: ino_t,
     nlink: c_uint,
     dev: c_uint,
     mode: c_ushort,
@@ -241,6 +244,12 @@ pub const KERN_MAXID = 37;
 
 pub const HOST_NAME_MAX = 255;
 
+// access function
+pub const F_OK = 0; // test for existence of file
+pub const X_OK = 1; // test for execute or search permission
+pub const W_OK = 2; // test for write permission
+pub const R_OK = 4; // test for read permission
+
 pub const O_RDONLY = 0;
 pub const O_NDELAY = O_NONBLOCK;
 pub const O_WRONLY = 1;
@@ -274,11 +283,12 @@ pub const SEEK_END = 2;
 pub const SEEK_DATA = 3;
 pub const SEEK_HOLE = 4;
 
-pub const F_OK = 0;
 pub const F_ULOCK = 0;
 pub const F_LOCK = 1;
 pub const F_TLOCK = 2;
 pub const F_TEST = 3;
+
+pub const FD_CLOEXEC = 1;
 
 pub const AT_FDCWD = -328243;
 pub const AT_SYMLINK_NOFOLLOW = 1;
@@ -686,6 +696,11 @@ pub const F_SETLKW = 9;
 pub const F_DUP2FD = 10;
 pub const F_DUPFD_CLOEXEC = 17;
 pub const F_DUP2FD_CLOEXEC = 18;
+
+pub const LOCK_SH = 1;
+pub const LOCK_EX = 2;
+pub const LOCK_UN = 8;
+pub const LOCK_NB = 4;
 
 pub const Flock = extern struct {
     l_start: off_t,
