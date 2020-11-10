@@ -916,8 +916,10 @@ bool want_first_arg_sret(CodeGen *g, FnTypeId *fn_type_id) {
     if (g->zig_target->arch == ZigLLVM_x86_64) {
         X64CABIClass abi_class = type_c_abi_x86_64_class(g, fn_type_id->return_type);
         return abi_class == X64CABIClass_MEMORY;
-    } else if (target_is_arm(g->zig_target)) {
+    } else if (target_is_arm(g->zig_target) || target_is_riscv(g->zig_target)) {
         return type_size(g, fn_type_id->return_type) > 16;
+    } else if (g->zig_target->arch == ZigLLVM_mipsel) {
+        return false;
     }
     zig_panic("TODO implement C ABI for this architecture. See https://github.com/ziglang/zig/issues/1481");
 }
@@ -3676,7 +3678,7 @@ ZigVar *add_variable(CodeGen *g, AstNode *source_node, Scope *parent_scope, Buf 
                 }
                 if (search_scope != nullptr) {
                     Tld *tld = find_decl(g, search_scope, name);
-                    if (tld != nullptr) {
+                    if (tld != nullptr && tld != src_tld) {
                         ErrorMsg *msg = add_node_error(g, source_node,
                                 buf_sprintf("redefinition of '%s'", buf_ptr(name)));
                         add_error_note(g, msg, tld->source_node, buf_sprintf("previous definition is here"));
@@ -7837,7 +7839,7 @@ static void resolve_llvm_types_struct(CodeGen *g, ZigType *struct_type, ResolveS
 
             assert(next_offset >= llvm_next_offset);
             if (next_offset > llvm_next_offset) {
-                size_t pad_bytes = next_offset - (field->offset + field_type->abi_size);
+                size_t pad_bytes = next_offset - (field->offset + LLVMStoreSizeOfType(g->target_data_ref, llvm_type));
                 if (pad_bytes != 0) {
                     LLVMTypeRef pad_llvm_type = LLVMArrayType(LLVMInt8Type(), pad_bytes);
                     element_types[gen_field_index] = pad_llvm_type;

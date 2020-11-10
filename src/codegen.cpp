@@ -30,6 +30,11 @@ enum ResumeId {
     ResumeIdCall,
 };
 
+// TODO https://github.com/ziglang/zig/issues/2883
+// Until then we have this same default as Clang.
+// This avoids https://github.com/ziglang/zig/issues/3275
+static const char *riscv_default_features = "+a,+c,+d,+f,+m,+relax";
+
 static void init_darwin_native(CodeGen *g) {
     char *osx_target = getenv("MACOSX_DEPLOYMENT_TARGET");
     char *ios_target = getenv("IPHONEOS_DEPLOYMENT_TARGET");
@@ -8731,8 +8736,9 @@ static void init(CodeGen *g) {
         }
     } else if (target_is_riscv(g->zig_target)) {
         // TODO https://github.com/ziglang/zig/issues/2883
+        // Be aware of https://github.com/ziglang/zig/issues/3275
         target_specific_cpu_args = "";
-        target_specific_features = "+a";
+        target_specific_features = riscv_default_features;
     } else {
         target_specific_cpu_args = "";
         target_specific_features = "";
@@ -8926,13 +8932,29 @@ static void detect_libc(CodeGen *g) {
             }
         }
         bool want_sys_dir = !buf_eql_buf(&g->libc->include_dir, &g->libc->sys_include_dir);
-        size_t dir_count = 1 + want_sys_dir;
-        g->libc_include_dir_len = dir_count;
+        size_t want_um_and_shared_dirs = (g->zig_target->os == OsWindows) ? 2 : 0;
+        size_t dir_count = 1 + want_sys_dir + want_um_and_shared_dirs;
+        g->libc_include_dir_len = 0;
         g->libc_include_dir_list = allocate<Buf*>(dir_count);
-        g->libc_include_dir_list[0] = &g->libc->include_dir;
+
+        g->libc_include_dir_list[g->libc_include_dir_len] = &g->libc->include_dir;
+        g->libc_include_dir_len += 1;
+
         if (want_sys_dir) {
-            g->libc_include_dir_list[1] = &g->libc->sys_include_dir;
+            g->libc_include_dir_list[g->libc_include_dir_len] = &g->libc->sys_include_dir;
+            g->libc_include_dir_len += 1;
         }
+
+        if (want_um_and_shared_dirs != 0) {
+            g->libc_include_dir_list[g->libc_include_dir_len] = buf_sprintf("%s" OS_SEP ".." OS_SEP "um",
+                    buf_ptr(&g->libc->include_dir));
+            g->libc_include_dir_len += 1;
+
+            g->libc_include_dir_list[g->libc_include_dir_len] = buf_sprintf("%s" OS_SEP ".." OS_SEP "shared",
+                    buf_ptr(&g->libc->include_dir));
+            g->libc_include_dir_len += 1;
+        }
+        assert(g->libc_include_dir_len == dir_count);
     } else if ((g->out_type == OutTypeExe || (g->out_type == OutTypeLib && g->is_dynamic)) &&
         !target_os_is_darwin(g->zig_target->os))
     {
@@ -9018,7 +9040,7 @@ void add_cc_args(CodeGen *g, ZigList<const char *> &args, const char *out_dep_pa
             args.append("-Xclang");
             args.append("-target-feature");
             args.append("-Xclang");
-            args.append("+a");
+            args.append(riscv_default_features);
         }
     }
     if (g->zig_target->os == OsFreestanding) {
@@ -10373,8 +10395,7 @@ CodeGen *create_child_codegen(CodeGen *parent_gen, Buf *root_src_path, OutType o
         ZigLibCInstallation *libc)
 {
     CodeGen *child_gen = codegen_create(nullptr, root_src_path, parent_gen->zig_target, out_type,
-        parent_gen->build_mode, parent_gen->zig_lib_dir, parent_gen->zig_std_dir, libc, get_stage1_cache_path(),
-        false);
+        parent_gen->build_mode, parent_gen->zig_lib_dir, libc, get_stage1_cache_path(), false);
     child_gen->disable_gen_h = true;
     child_gen->want_stack_check = WantStackCheckDisabled;
     child_gen->verbose_tokenize = parent_gen->verbose_tokenize;
@@ -10402,7 +10423,7 @@ CodeGen *create_child_codegen(CodeGen *parent_gen, Buf *root_src_path, OutType o
 }
 
 CodeGen *codegen_create(Buf *main_pkg_path, Buf *root_src_path, const ZigTarget *target,
-    OutType out_type, BuildMode build_mode, Buf *override_lib_dir, Buf *override_std_dir,
+    OutType out_type, BuildMode build_mode, Buf *override_lib_dir,
     ZigLibCInstallation *libc, Buf *cache_dir, bool is_test_build)
 {
     CodeGen *g = allocate<CodeGen>(1);
@@ -10420,12 +10441,8 @@ CodeGen *codegen_create(Buf *main_pkg_path, Buf *root_src_path, const ZigTarget 
         g->zig_lib_dir = override_lib_dir;
     }
 
-    if (override_std_dir == nullptr) {
-        g->zig_std_dir = buf_alloc();
-        os_path_join(g->zig_lib_dir, buf_create_from_str("std"), g->zig_std_dir);
-    } else {
-        g->zig_std_dir = override_std_dir;
-    }
+    g->zig_std_dir = buf_alloc();
+    os_path_join(g->zig_lib_dir, buf_create_from_str("std"), g->zig_std_dir);
 
     g->zig_c_headers_dir = buf_alloc();
     os_path_join(g->zig_lib_dir, buf_create_from_str("include"), g->zig_c_headers_dir);

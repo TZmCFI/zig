@@ -24,6 +24,7 @@ comptime {
     _ = @import("behavior/bugs/1500.zig");
     _ = @import("behavior/bugs/1607.zig");
     _ = @import("behavior/bugs/1735.zig");
+    _ = @import("behavior/bugs/1741.zig");
     _ = @import("behavior/bugs/1851.zig");
     _ = @import("behavior/bugs/1914.zig");
     _ = @import("behavior/bugs/2006.zig");
@@ -58,6 +59,7 @@ comptime {
     _ = @import("behavior/floatop.zig");
     _ = @import("behavior/fn.zig");
     _ = @import("behavior/fn_in_struct_in_comptime.zig");
+    _ = @import("behavior/fn_delegation.zig");
     _ = @import("behavior/for.zig");
     _ = @import("behavior/generics.zig");
     _ = @import("behavior/hasdecl.zig");
