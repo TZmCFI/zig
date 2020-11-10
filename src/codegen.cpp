@@ -487,6 +487,10 @@ static LLVMValueRef make_fn_llvm_value(CodeGen *g, ZigFn *fn) {
 
     if (cc == CallingConventionNaked) {
         addLLVMFnAttr(llvm_fn, "naked");
+    } else if (fn->is_tc_exc_handler) {
+        // TODO: Detect and report conflicting calling convention specifications
+        // TODO: Check parameters
+        LLVMSetFunctionCallConv(llvm_fn, LLVMTCINTRCallConv);
     } else {
         LLVMSetFunctionCallConv(llvm_fn, get_llvm_cc(g, fn_type->data.fn.fn_type_id.cc));
     }
@@ -5968,6 +5972,7 @@ static LLVMValueRef ir_render_instruction(CodeGen *g, IrExecutable *executable, 
         case IrInstructionIdSetCold:
         case IrInstructionIdSetRuntimeSafety:
         case IrInstructionIdSetFloatMode:
+        case IrInstructionIdSetTcExcHandler:
         case IrInstructionIdArrayType:
         case IrInstructionIdAnyFrameType:
         case IrInstructionIdSliceType:
@@ -7925,6 +7930,7 @@ static void define_builtin_fns(CodeGen *g) {
     create_builtin_fn(g, BuiltinFnIdSetCold, "setCold", 1);
     create_builtin_fn(g, BuiltinFnIdSetRuntimeSafety, "setRuntimeSafety", 1);
     create_builtin_fn(g, BuiltinFnIdSetFloatMode, "setFloatMode", 1);
+    create_builtin_fn(g, BuiltinFnIdSetTcExcHandler, "setTcExcHandler", 1);
     create_builtin_fn(g, BuiltinFnIdPanic, "panic", 1);
     create_builtin_fn(g, BuiltinFnIdPtrCast, "ptrCast", 2);
     create_builtin_fn(g, BuiltinFnIdBitCast, "bitCast", 2);

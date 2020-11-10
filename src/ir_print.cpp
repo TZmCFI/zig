@@ -114,6 +114,8 @@ static const char* ir_instruction_type_str(IrInstruction* instruction) {
             return "SetRuntimeSafety";
         case IrInstructionIdSetFloatMode:
             return "SetFloatMode";
+        case IrInstructionIdSetTcExcHandler:
+            return "SetTcExcHandler";
         case IrInstructionIdArrayType:
             return "ArrayType";
         case IrInstructionIdAnyFrameType:
@@ -823,6 +825,12 @@ static void ir_print_set_cold(IrPrint *irp, IrInstructionSetCold *instruction) {
 static void ir_print_set_runtime_safety(IrPrint *irp, IrInstructionSetRuntimeSafety *instruction) {
     fprintf(irp->f, "@setRuntimeSafety(");
     ir_print_other_instruction(irp, instruction->safety_on);
+    fprintf(irp->f, ")");
+}
+
+static void ir_print_set_tc_exc_handler(IrPrint *irp, IrInstructionSetTcExcHandler *instruction) {
+    fprintf(irp->f, "@setTcExcHandler(");
+    ir_print_other_instruction(irp, instruction->is_exc_handler);
     fprintf(irp->f, ")");
 }
 
@@ -2045,6 +2053,9 @@ static void ir_print_instruction(IrPrint *irp, IrInstruction *instruction, bool 
             break;
         case IrInstructionIdSetFloatMode:
             ir_print_set_float_mode(irp, (IrInstructionSetFloatMode *)instruction);
+            break;
+        case IrInstructionIdSetTcExcHandler:
+            ir_print_set_tc_exc_handler(irp, (IrInstructionSetTcExcHandler *)instruction);
             break;
         case IrInstructionIdArrayType:
             ir_print_array_type(irp, (IrInstructionArrayType *)instruction);

@@ -553,6 +553,10 @@ static constexpr IrInstructionId ir_instruction_id(IrInstructionSetCold *) {
     return IrInstructionIdSetCold;
 }
 
+static constexpr IrInstructionId ir_instruction_id(IrInstructionSetTcExcHandler *) {
+    return IrInstructionIdSetTcExcHandler;
+}
+
 static constexpr IrInstructionId ir_instruction_id(IrInstructionSetRuntimeSafety *) {
     return IrInstructionIdSetRuntimeSafety;
 }
@@ -1689,6 +1693,15 @@ static IrInstruction *ir_build_set_cold(IrBuilder *irb, Scope *scope, AstNode *s
     instruction->is_cold = is_cold;
 
     ir_ref_instruction(is_cold, irb->current_basic_block);
+
+    return &instruction->base;
+}
+
+static IrInstruction *ir_build_set_tc_exc_handler(IrBuilder *irb, Scope *scope, AstNode *source_node, IrInstruction *is_exc_handler) {
+    IrInstructionSetTcExcHandler *instruction = ir_build_instruction<IrInstructionSetTcExcHandler>(irb, scope, source_node);
+    instruction->is_exc_handler = is_exc_handler;
+
+    ir_ref_instruction(is_exc_handler, irb->current_basic_block);
 
     return &instruction->base;
 }
@@ -4527,6 +4540,16 @@ static IrInstruction *ir_gen_builtin_fn_call(IrBuilder *irb, Scope *scope, AstNo
 
                 IrInstruction *set_cold = ir_build_set_cold(irb, scope, node, arg0_value);
                 return ir_lval_wrap(irb, scope, set_cold, lval, result_loc);
+            }
+        case BuiltinFnIdSetTcExcHandler:
+            {
+                AstNode *arg0_node = node->data.fn_call_expr.params.at(0);
+                IrInstruction *arg0_value = ir_gen_node(irb, arg0_node, scope);
+                if (arg0_value == irb->codegen->invalid_instruction)
+                    return arg0_value;
+
+                IrInstruction *set_tc_exc_handler = ir_build_set_tc_exc_handler(irb, scope, node, arg0_value);
+                return ir_lval_wrap(irb, scope, set_tc_exc_handler, lval, result_loc);
             }
         case BuiltinFnIdSetRuntimeSafety:
             {
@@ -18419,6 +18442,35 @@ static IrInstruction *ir_analyze_instruction_set_cold(IrAnalyze *ira, IrInstruct
     return ir_const_void(ira, &instruction->base);
 }
 
+static IrInstruction *ir_analyze_instruction_set_tc_exc_handler(IrAnalyze *ira, IrInstructionSetTcExcHandler *instruction) {
+    if (ira->new_irb.exec->is_inline) {
+        // ignore setCold when running functions at compile time
+        return ir_const_void(ira, &instruction->base);
+    }
+
+    IrInstruction *is_exc_handler_value = instruction->is_exc_handler->child;
+    bool want_exc_handler;
+    if (!ir_resolve_bool(ira, is_exc_handler_value, &want_exc_handler))
+        return ira->codegen->invalid_instruction;
+
+    ZigFn *fn_entry = scope_fn_entry(instruction->base.scope);
+    if (fn_entry == nullptr) {
+        ir_add_error(ira, &instruction->base, buf_sprintf("@setCold outside function"));
+        return ira->codegen->invalid_instruction;
+    }
+
+    if (fn_entry->set_cold_node != nullptr) {
+        ErrorMsg *msg = ir_add_error(ira, &instruction->base, buf_sprintf("cold set twice in same function"));
+        add_error_note(ira->codegen, msg, fn_entry->set_cold_node, buf_sprintf("first set here"));
+        return ira->codegen->invalid_instruction;
+    }
+
+    fn_entry->set_tc_exc_handler_node = instruction->base.source_node;
+    fn_entry->is_tc_exc_handler = want_exc_handler;
+
+    return ir_const_void(ira, &instruction->base);
+}
+
 static IrInstruction *ir_analyze_instruction_set_runtime_safety(IrAnalyze *ira,
         IrInstructionSetRuntimeSafety *set_runtime_safety_instruction)
 {
@@ -25942,6 +25994,8 @@ static IrInstruction *ir_analyze_instruction_base(IrAnalyze *ira, IrInstruction 
             return ir_analyze_instruction_typeof(ira, (IrInstructionTypeOf *)instruction);
         case IrInstructionIdSetCold:
             return ir_analyze_instruction_set_cold(ira, (IrInstructionSetCold *)instruction);
+        case IrInstructionIdSetTcExcHandler:
+            return ir_analyze_instruction_set_tc_exc_handler(ira, (IrInstructionSetTcExcHandler *)instruction);
         case IrInstructionIdSetRuntimeSafety:
             return ir_analyze_instruction_set_runtime_safety(ira, (IrInstructionSetRuntimeSafety *)instruction);
         case IrInstructionIdSetFloatMode:
@@ -26294,6 +26348,7 @@ bool ir_has_side_effects(IrInstruction *instruction) {
         case IrInstructionIdSetCold:
         case IrInstructionIdSetRuntimeSafety:
         case IrInstructionIdSetFloatMode:
+        case IrInstructionIdSetTcExcHandler:
         case IrInstructionIdImport:
         case IrInstructionIdCompileErr:
         case IrInstructionIdCompileLog:

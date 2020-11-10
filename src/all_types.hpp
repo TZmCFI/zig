@@ -1518,6 +1518,7 @@ struct ZigFn {
     const AstNode *inferred_async_node;
     ZigFn *inferred_async_fn;
     AstNode *non_async_node;
+    AstNode *set_tc_exc_handler_node;
 
     ZigList<GlobalExport> export_list;
     ZigList<IrInstructionCallGen *> call_list;
@@ -1534,6 +1535,7 @@ struct ZigFn {
     bool calls_or_awaits_errorable_fn;
     bool is_cold;
     bool is_test;
+    bool is_tc_exc_handler;
 };
 
 uint32_t fn_table_entry_hash(ZigFn*);
@@ -1616,6 +1618,7 @@ enum BuiltinFnId {
     BuiltinFnIdSetCold,
     BuiltinFnIdSetRuntimeSafety,
     BuiltinFnIdSetFloatMode,
+    BuiltinFnIdSetTcExcHandler,
     BuiltinFnIdTypeName,
     BuiltinFnIdPanic,
     BuiltinFnIdPtrCast,
@@ -2397,6 +2400,7 @@ enum IrInstructionId {
     IrInstructionIdSetCold,
     IrInstructionIdSetRuntimeSafety,
     IrInstructionIdSetFloatMode,
+    IrInstructionIdSetTcExcHandler,
     IrInstructionIdArrayType,
     IrInstructionIdAnyFrameType,
     IrInstructionIdSliceType,
@@ -2879,6 +2883,12 @@ struct IrInstructionSetCold {
     IrInstruction base;
 
     IrInstruction *is_cold;
+};
+
+struct IrInstructionSetTcExcHandler {
+    IrInstruction base;
+
+    IrInstruction *is_exc_handler;
 };
 
 struct IrInstructionSetRuntimeSafety {
