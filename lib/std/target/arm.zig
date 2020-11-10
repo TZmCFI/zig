@@ -729,11 +729,6 @@ pub const all_features = blk: {
         .description = "FP compare + branch is slow",
         .dependencies = featureSet(&[_]Feature{}),
     };
-    result[@enumToInt(Feature.slow_load_D_subreg)] = .{
-        .llvm_name = "slow-load-D-subreg",
-        .description = "Loading into D subregs is slow",
-        .dependencies = featureSet(&[_]Feature{}),
-    };
     result[@enumToInt(Feature.slow_odd_reg)] = .{
         .llvm_name = "slow-odd-reg",
         .description = "VLDM/VSTM starting with an odd register is slow",
