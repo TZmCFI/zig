@@ -1,3 +1,5 @@
+usingnamespace @import("../bits.zig");
+
 pub fn syscall0(number: usize) usize {
     return asm volatile (
         \\ syscall
@@ -6,6 +8,25 @@ pub fn syscall0(number: usize) usize {
         \\ 1:
         : [ret] "={$2}" (-> usize)
         : [number] "{$2}" (number)
+        : "memory", "cc", "$7"
+    );
+}
+
+pub fn syscall_pipe(fd: *[2]i32) usize {
+    return asm volatile (
+        \\ .set noat
+        \\ .set noreorder
+        \\ syscall
+        \\ blez $7, 1f
+        \\ nop
+        \\ b 2f
+        \\ subu $2, $0, $2
+        \\ 1:
+        \\ sw $2, 0($4)
+        \\ sw $3, 4($4)
+        \\ 2:
+        : [ret] "={$2}" (-> usize)
+        : [number] "{$2}" (usize(SYS_pipe))
         : "memory", "cc", "$7"
     );
 }
@@ -122,3 +143,19 @@ pub fn syscall6(
 
 /// This matches the libc clone function.
 pub extern fn clone(func: extern fn (arg: usize) u8, stack: usize, flags: u32, arg: usize, ptid: *i32, tls: usize, ctid: *i32) usize;
+
+pub nakedcc fn restore() void {
+    return asm volatile ("syscall"
+        :
+        : [number] "{$2}" (usize(SYS_sigreturn))
+        : "memory", "cc", "$7"
+    );
+}
+
+pub nakedcc fn restore_rt() void {
+    return asm volatile ("syscall"
+        :
+        : [number] "{$2}" (usize(SYS_rt_sigreturn))
+        : "memory", "cc", "$7"
+    );
+}

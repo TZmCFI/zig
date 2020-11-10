@@ -1163,10 +1163,15 @@ pub const Target = union(enum) {
     }
 
     pub fn exeFileExt(self: Target) []const u8 {
-        return switch (self.getOs()) {
-            .windows => ".exe",
-            else => "",
-        };
+        if (self.isWindows()) {
+            return ".exe";
+        } else if (self.isUefi()) {
+            return ".efi";
+        } else if (self.isWasm()) {
+            return ".wasm";
+        } else {
+            return "";
+        }
     }
 
     pub fn staticLibSuffix(self: Target) []const u8 {
@@ -1484,6 +1489,9 @@ pub const LibExeObjStep = struct {
     glibc_multi_install_dir: ?[]const u8 = null,
 
     dynamic_linker: ?[]const u8 = null,
+
+    /// Position Independent Code
+    force_pic: ?bool = null,
 
     const LinkObject = union(enum) {
         StaticPath: []const u8,
@@ -2319,6 +2327,14 @@ pub const LibExeObjStep = struct {
         if (self.main_pkg_path) |dir| {
             try zig_args.append("--main-pkg-path");
             try zig_args.append(builder.pathFromRoot(dir));
+        }
+
+        if (self.force_pic) |pic| {
+            if (pic) {
+                try zig_args.append("-fPIC");
+            } else {
+                try zig_args.append("-fno-PIC");
+            }
         }
 
         if (self.kind == Kind.Test) {

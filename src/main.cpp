@@ -16,7 +16,7 @@
 #include "libc_installation.hpp"
 #include "userland.h"
 #include "glibc.hpp"
-#include "stack_report.hpp"
+#include "dump_analysis.hpp"
 
 #include <stdio.h>
 
@@ -34,7 +34,7 @@ static int print_full_usage(const char *arg0, FILE *file, int return_code) {
         "  build-exe [source]           create executable from source or object files\n"
         "  build-lib [source]           create library from source or object files\n"
         "  build-obj [source]           create object from source or assembly\n"
-        "  builtin                      show the source code of that @import(\"builtin\")\n"
+        "  builtin                      show the source code of @import(\"builtin\")\n"
         "  cc                           C compiler\n"
         "  fmt                          parse files and render in canonical zig format\n"
         "  id                           print the base64-encoded compiler id\n"
@@ -64,6 +64,8 @@ static int print_full_usage(const char *arg0, FILE *file, int return_code) {
         "  -fno-PIC                     disable Position Independent Code\n"
         "  -ftime-report                print timing diagnostics\n"
         "  -fstack-report               print stack size diagnostics\n"
+        "  -fdump-analysis              write analysis.json file with type information\n"
+        "  -fgenerate-docs              create a docs/ dir with html documentation\n"
         "  --libc [file]                Provide a file which specifies libc paths\n"
         "  --name [name]                override output name\n"
         "  --output-dir [dir]           override output directory (defaults to cwd)\n"
@@ -481,6 +483,8 @@ int main(int argc, char **argv) {
     size_t ver_patch = 0;
     bool timing_info = false;
     bool stack_report = false;
+    bool enable_dump_analysis = false;
+    bool enable_doc_generation = false;
     const char *cache_dir = nullptr;
     CliPkg *cur_pkg = allocate<CliPkg>(1);
     BuildMode build_mode = BuildModeDebug;
@@ -670,6 +674,10 @@ int main(int argc, char **argv) {
                 timing_info = true;
             } else if (strcmp(arg, "-fstack-report") == 0) {
                 stack_report = true;
+            } else if (strcmp(arg, "-fdump-analysis") == 0) {
+                enable_dump_analysis = true;
+            } else if (strcmp(arg, "-fgenerate-docs") == 0) {
+                enable_doc_generation = true;
             } else if (strcmp(arg, "--enable-valgrind") == 0) {
                 valgrind_support = ValgrindSupportEnabled;
             } else if (strcmp(arg, "--disable-valgrind") == 0) {
@@ -1146,6 +1154,8 @@ int main(int argc, char **argv) {
 
             g->enable_time_report = timing_info;
             g->enable_stack_report = stack_report;
+            g->enable_dump_analysis = enable_dump_analysis;
+            g->enable_doc_generation = enable_doc_generation;
             codegen_set_out_name(g, buf_out_name);
             codegen_set_lib_version(g, ver_major, ver_minor, ver_patch);
             g->want_single_threaded = want_single_threaded;
