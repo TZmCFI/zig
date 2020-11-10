@@ -17,38 +17,38 @@ const TailQueue = std.TailQueue;
 const maxInt = std.math.maxInt;
 
 pub const ChildProcess = struct {
-    pub pid: if (os.windows.is_the_target) void else i32,
-    pub handle: if (os.windows.is_the_target) windows.HANDLE else void,
-    pub thread_handle: if (os.windows.is_the_target) windows.HANDLE else void,
+    pid: if (builtin.os == .windows) void else i32,
+    handle: if (builtin.os == .windows) windows.HANDLE else void,
+    thread_handle: if (builtin.os == .windows) windows.HANDLE else void,
 
-    pub allocator: *mem.Allocator,
+    allocator: *mem.Allocator,
 
-    pub stdin: ?File,
-    pub stdout: ?File,
-    pub stderr: ?File,
+    stdin: ?File,
+    stdout: ?File,
+    stderr: ?File,
 
-    pub term: ?(SpawnError!Term),
+    term: ?(SpawnError!Term),
 
-    pub argv: []const []const u8,
+    argv: []const []const u8,
 
     /// Leave as null to use the current env map using the supplied allocator.
-    pub env_map: ?*const BufMap,
+    env_map: ?*const BufMap,
 
-    pub stdin_behavior: StdIo,
-    pub stdout_behavior: StdIo,
-    pub stderr_behavior: StdIo,
+    stdin_behavior: StdIo,
+    stdout_behavior: StdIo,
+    stderr_behavior: StdIo,
 
     /// Set to change the user id when spawning the child process.
-    pub uid: if (os.windows.is_the_target) void else ?u32,
+    uid: if (builtin.os == .windows) void else ?u32,
 
     /// Set to change the group id when spawning the child process.
-    pub gid: if (os.windows.is_the_target) void else ?u32,
+    gid: if (builtin.os == .windows) void else ?u32,
 
     /// Set to change the current working directory when spawning the child process.
-    pub cwd: ?[]const u8,
+    cwd: ?[]const u8,
 
-    err_pipe: if (os.windows.is_the_target) void else [2]os.fd_t,
-    llnode: if (os.windows.is_the_target) void else TailQueue(*ChildProcess).Node,
+    err_pipe: if (builtin.os == .windows) void else [2]os.fd_t,
+    llnode: if (builtin.os == .windows) void else TailQueue(*ChildProcess).Node,
 
     pub const SpawnError = error{OutOfMemory} || os.ExecveError || os.SetIdError ||
         os.ChangeCurDirError || windows.CreateProcessError;
@@ -82,8 +82,8 @@ pub const ChildProcess = struct {
             .term = null,
             .env_map = null,
             .cwd = null,
-            .uid = if (os.windows.is_the_target) {} else null,
-            .gid = if (os.windows.is_the_target) {} else null,
+            .uid = if (builtin.os == .windows) {} else null,
+            .gid = if (builtin.os == .windows) {} else null,
             .stdin = null,
             .stdout = null,
             .stderr = null,
@@ -103,7 +103,7 @@ pub const ChildProcess = struct {
 
     /// On success must call `kill` or `wait`.
     pub fn spawn(self: *ChildProcess) !void {
-        if (os.windows.is_the_target) {
+        if (builtin.os == .windows) {
             return self.spawnWindows();
         } else {
             return self.spawnPosix();
@@ -117,7 +117,7 @@ pub const ChildProcess = struct {
 
     /// Forcibly terminates child process and then cleans up all resources.
     pub fn kill(self: *ChildProcess) !Term {
-        if (os.windows.is_the_target) {
+        if (builtin.os == .windows) {
             return self.killWindows(1);
         } else {
             return self.killPosix();
@@ -147,7 +147,7 @@ pub const ChildProcess = struct {
 
     /// Blocks until child process terminates and then cleans up all resources.
     pub fn wait(self: *ChildProcess) !Term {
-        if (os.windows.is_the_target) {
+        if (builtin.os == .windows) {
             return self.waitWindows();
         } else {
             return self.waitPosix();
@@ -365,7 +365,8 @@ pub const ChildProcess = struct {
                 os.setreuid(uid, uid) catch |err| forkChildErrReport(err_pipe[1], err);
             }
 
-            os.execve(self.allocator, self.argv, env_map) catch |err| forkChildErrReport(err_pipe[1], err);
+            const err = os.execvpe(self.allocator, self.argv, env_map);
+            forkChildErrReport(err_pipe[1], err);
         }
 
         // we are the parent

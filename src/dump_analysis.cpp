@@ -216,6 +216,21 @@ static void jw_int(JsonWriter *jw, int64_t x) {
     jw_pop_state(jw);
 }
 
+static void jw_bigint(JsonWriter *jw, const BigInt *x) {
+    assert(jw->state[jw->state_index] == JsonWriterStateValue);
+    Buf *str = buf_alloc();
+    bigint_append_buf(str, x, 10);
+
+    if (bigint_fits_in_bits(x, 52, true)) {
+        fprintf(jw->f, "%s", buf_ptr(str));
+    } else {
+        fprintf(jw->f, "\"%s\"", buf_ptr(str));
+    }
+    jw_pop_state(jw);
+
+    buf_destroy(str);
+}
+
 static void jw_string(JsonWriter *jw, const char *s) {
     assert(jw->state[jw->state_index] == JsonWriterStateValue);
     jw_write_escaped_string(jw, s);
@@ -224,23 +239,6 @@ static void jw_string(JsonWriter *jw, const char *s) {
 
 
 static void tree_print(FILE *f, ZigType *ty, size_t indent);
-
-static void pretty_print_bytes(FILE *f, double n) {
-    if (n > 1024.0 * 1024.0 * 1024.0) {
-        fprintf(f, "%.02f GiB", n / 1024.0 / 1024.0 / 1024.0);
-        return;
-    }
-    if (n > 1024.0 * 1024.0) {
-        fprintf(f, "%.02f MiB", n / 1024.0 / 1024.0);
-        return;
-    }
-    if (n > 1024.0) {
-        fprintf(f, "%.02f KiB", n / 1024.0);
-        return;
-    }
-    fprintf(f, "%.02f bytes", n );
-    return;
-}
 
 static int compare_type_abi_sizes_desc(const void *a, const void *b) {
     uint64_t size_a = (*(ZigType * const*)(a))->abi_size;
@@ -307,7 +305,7 @@ static void tree_print(FILE *f, ZigType *ty, size_t indent) {
 
     start_peer(f, indent);
     fprintf(f, "\"sizef\": \"");
-    pretty_print_bytes(f, ty->abi_size);
+    zig_pretty_print_bytes(f, ty->abi_size);
     fprintf(f, "\"");
 
     start_peer(f, indent);
@@ -441,6 +439,10 @@ static uint32_t anal_dump_get_fn_id(AnalDumpCtx *ctx, ZigFn *fn) {
     auto existing_entry = ctx->fn_map.put_unique(fn, fn_id);
     if (existing_entry == nullptr) {
         ctx->fn_list.append(fn);
+
+        // poke the fn
+        (void)anal_dump_get_type_id(ctx, fn->type_entry);
+        (void)anal_dump_get_node_id(ctx, fn->proto_node);
     } else {
         fn_id = existing_entry->value;
     }
@@ -685,11 +687,7 @@ static void anal_dump_value(AnalDumpCtx *ctx, AstNode *source_node, ZigType *ty,
         case ZigTypeIdFn: {
             if (value->data.x_ptr.special == ConstPtrSpecialFunction) {
                 ZigFn *val_fn = value->data.x_ptr.data.fn.fn_entry;
-                if (val_fn->type_entry->data.fn.is_generic) {
-                    anal_dump_node_ref(ctx, val_fn->proto_node);
-                } else {
-                    anal_dump_fn_ref(ctx, val_fn);
-                }
+                anal_dump_fn_ref(ctx, val_fn);
             } else {
                 jw_null(&ctx->jw);
             }
@@ -732,23 +730,6 @@ static void anal_dump_pointer_attrs(AnalDumpCtx *ctx, ZigType *ty) {
     anal_dump_type_ref(ctx, ty->data.pointer.child_type);
 }
 
-static void anal_dump_struct_field(AnalDumpCtx *ctx, const TypeStructField *struct_field) {
-    JsonWriter *jw = &ctx->jw;
-
-    jw_begin_object(jw);
-
-    jw_object_field(jw, "name");
-    jw_string(jw, buf_ptr(struct_field->name));
-
-    jw_object_field(jw, "type");
-    anal_dump_type_ref(ctx, struct_field->type_entry);
-
-    jw_object_field(jw, "src");
-    anal_dump_node_ref(ctx, struct_field->decl_node);
-
-    jw_end_object(jw);
-}
-
 static void anal_dump_type(AnalDumpCtx *ctx, ZigType *ty) {
     JsonWriter *jw = &ctx->jw;
     jw_array_elem(jw);
@@ -760,6 +741,7 @@ static void anal_dump_type(AnalDumpCtx *ctx, ZigType *ty) {
     switch (ty->id) {
         case ZigTypeIdMetaType:
         case ZigTypeIdBool:
+        case ZigTypeIdEnumLiteral:
             break;
         case ZigTypeIdStruct: {
             if (ty->data.structure.is_slice) {
@@ -771,6 +753,10 @@ static void anal_dump_type(AnalDumpCtx *ctx, ZigType *ty) {
 
             jw_object_field(jw, "name");
             jw_string(jw, buf_ptr(&ty->name));
+
+            jw_object_field(jw, "src");
+            anal_dump_node_ref(ctx, ty->data.structure.decl_node);
+
             {
                 jw_object_field(jw, "pubDecls");
                 jw_begin_array(jw);
@@ -811,13 +797,13 @@ static void anal_dump_type(AnalDumpCtx *ctx, ZigType *ty) {
                 jw_end_array(jw);
             }
 
-            {
+            if (ty->data.structure.src_field_count != 0) {
                 jw_object_field(jw, "fields");
                 jw_begin_array(jw);
 
                 for(size_t i = 0; i < ty->data.structure.src_field_count; i += 1) {
                     jw_array_elem(jw);
-                    anal_dump_struct_field(ctx, &ty->data.structure.fields[i]);
+                    anal_dump_type_ref(ctx, ty->data.structure.fields[i].type_entry);
                 }
                 jw_end_array(jw);
             }
@@ -827,7 +813,124 @@ static void anal_dump_type(AnalDumpCtx *ctx, ZigType *ty) {
 
                 jw_object_field(jw, "file");
                 anal_dump_file_ref(ctx, path_buf);
+            }
+            break;
+        }
+        case ZigTypeIdUnion: {
+            jw_object_field(jw, "name");
+            jw_string(jw, buf_ptr(&ty->name));
 
+            jw_object_field(jw, "src");
+            anal_dump_node_ref(ctx, ty->data.unionation.decl_node);
+
+            {
+                jw_object_field(jw, "pubDecls");
+                jw_begin_array(jw);
+
+                ScopeDecls *decls_scope = ty->data.unionation.decls_scope;
+                auto it = decls_scope->decl_table.entry_iterator();
+                for (;;) {
+                    auto *entry = it.next();
+                    if (!entry)
+                        break;
+
+                    Tld *tld = entry->value;
+                    if (tld->visib_mod == VisibModPub) {
+                        jw_array_elem(jw);
+                        anal_dump_decl_ref(ctx, tld);
+                    }
+                }
+                jw_end_array(jw);
+            }
+
+            {
+                jw_object_field(jw, "privDecls");
+                jw_begin_array(jw);
+
+                ScopeDecls *decls_scope = ty->data.unionation.decls_scope;
+                auto it = decls_scope->decl_table.entry_iterator();
+                for (;;) {
+                    auto *entry = it.next();
+                    if (!entry)
+                        break;
+
+                    Tld *tld = entry->value;
+                    if (tld->visib_mod == VisibModPrivate) {
+                        jw_array_elem(jw);
+                        anal_dump_decl_ref(ctx, tld);
+                    }
+                }
+                jw_end_array(jw);
+            }
+
+            if (ty->data.unionation.src_field_count != 0) {
+                jw_object_field(jw, "fields");
+                jw_begin_array(jw);
+
+                for(size_t i = 0; i < ty->data.unionation.src_field_count; i += 1) {
+                    jw_array_elem(jw);
+                    anal_dump_type_ref(ctx, ty->data.unionation.fields[i].type_entry);
+                }
+                jw_end_array(jw);
+            }
+            break;
+        }
+        case ZigTypeIdEnum: {
+            jw_object_field(jw, "name");
+            jw_string(jw, buf_ptr(&ty->name));
+
+            jw_object_field(jw, "src");
+            anal_dump_node_ref(ctx, ty->data.enumeration.decl_node);
+
+            {
+                jw_object_field(jw, "pubDecls");
+                jw_begin_array(jw);
+
+                ScopeDecls *decls_scope = ty->data.enumeration.decls_scope;
+                auto it = decls_scope->decl_table.entry_iterator();
+                for (;;) {
+                    auto *entry = it.next();
+                    if (!entry)
+                        break;
+
+                    Tld *tld = entry->value;
+                    if (tld->visib_mod == VisibModPub) {
+                        jw_array_elem(jw);
+                        anal_dump_decl_ref(ctx, tld);
+                    }
+                }
+                jw_end_array(jw);
+            }
+
+            {
+                jw_object_field(jw, "privDecls");
+                jw_begin_array(jw);
+
+                ScopeDecls *decls_scope = ty->data.enumeration.decls_scope;
+                auto it = decls_scope->decl_table.entry_iterator();
+                for (;;) {
+                    auto *entry = it.next();
+                    if (!entry)
+                        break;
+
+                    Tld *tld = entry->value;
+                    if (tld->visib_mod == VisibModPrivate) {
+                        jw_array_elem(jw);
+                        anal_dump_decl_ref(ctx, tld);
+                    }
+                }
+                jw_end_array(jw);
+            }
+
+            if (ty->data.enumeration.src_field_count != 0) {
+                jw_object_field(jw, "fields");
+                jw_begin_array(jw);
+
+                for(size_t i = 0; i < ty->data.enumeration.src_field_count; i += 1) {
+                    jw_array_elem(jw);
+                    jw_bigint(jw, &ty->data.enumeration.fields[i].value);
+                }
+                jw_end_array(jw);
             }
             break;
         }
@@ -870,6 +973,11 @@ static void anal_dump_type(AnalDumpCtx *ctx, ZigType *ty) {
                 }
                 jw_end_array(jw);
             }
+            break;
+        }
+        case ZigTypeIdOptional: {
+            jw_object_field(jw, "child");
+            anal_dump_type_ref(ctx, ty->data.maybe.child_type);
             break;
         }
         case ZigTypeIdPointer: {
@@ -918,6 +1026,14 @@ static void anal_dump_type(AnalDumpCtx *ctx, ZigType *ty) {
 
             break;
         }
+        case ZigTypeIdArray: {
+            jw_object_field(jw, "len");
+            jw_int(jw, ty->data.array.len);
+
+            jw_object_field(jw, "elem");
+            anal_dump_type_ref(ctx, ty->data.array.child_type);
+            break;
+        }
         default:
             jw_object_field(jw, "name");
             jw_string(jw, buf_ptr(&ty->name));
@@ -940,13 +1056,25 @@ static void anal_dump_node(AnalDumpCtx *ctx, const AstNode *node) {
     jw_object_field(jw, "col");
     jw_int(jw, node->column);
 
-    const Buf *doc_comments_buf;
+    const Buf *doc_comments_buf = nullptr;
+    const Buf *name_buf = nullptr;
+    const ZigList<AstNode *> *field_nodes = nullptr;
+    bool is_var_args = false;
+    bool is_noalias = false;
+    bool is_comptime = false;
+
     switch (node->type) {
         case NodeTypeParamDecl:
             doc_comments_buf = &node->data.param_decl.doc_comments;
+            name_buf = node->data.param_decl.name;
+            is_var_args = node->data.param_decl.is_var_args;
+            is_noalias = node->data.param_decl.is_noalias;
+            is_comptime = node->data.param_decl.is_comptime;
             break;
         case NodeTypeFnProto:
             doc_comments_buf = &node->data.fn_proto.doc_comments;
+            field_nodes = &node->data.fn_proto.params;
+            is_var_args = node->data.fn_proto.is_var_args;
             break;
         case NodeTypeVariableDeclaration:
             doc_comments_buf = &node->data.variable_declaration.doc_comments;
@@ -956,14 +1084,48 @@ static void anal_dump_node(AnalDumpCtx *ctx, const AstNode *node) {
             break;
         case NodeTypeStructField:
             doc_comments_buf = &node->data.struct_field.doc_comments;
+            name_buf = node->data.struct_field.name;
+            break;
+        case NodeTypeContainerDecl:
+            field_nodes = &node->data.container_decl.fields;
             break;
         default:
-            doc_comments_buf = nullptr;
             break;
     }
+
     if (doc_comments_buf != nullptr && doc_comments_buf->list.length != 0) {
         jw_object_field(jw, "docs");
         jw_string(jw, buf_ptr(doc_comments_buf));
+    }
+
+    if (name_buf != nullptr) {
+        jw_object_field(jw, "name");
+        jw_string(jw, buf_ptr(name_buf));
+    }
+
+    if (field_nodes != nullptr) {
+        jw_object_field(jw, "fields");
+        jw_begin_array(jw);
+        for (size_t i = 0; i < field_nodes->length; i += 1) {
+            jw_array_elem(jw);
+            anal_dump_node_ref(ctx, field_nodes->at(i));
+        }
+        jw_end_array(jw);
+    }
+
+    if (is_var_args) {
+        jw_object_field(jw, "varArgs");
+        jw_bool(jw, true);
+    }
+
+    if (is_comptime) {
+        jw_object_field(jw, "comptime");
+        jw_bool(jw, true);
+    }
+
+    if (is_noalias) {
+        jw_object_field(jw, "noalias");
+        jw_bool(jw, true);
     }
 
     jw_end_object(jw);
@@ -1036,10 +1198,16 @@ void zig_print_analysis_dump(CodeGen *g, FILE *f, const char *one_indent, const 
         jw_object_field(jw, "zigVersion");
         jw_string(jw, ZIG_VERSION_STRING);
 
+        jw_object_field(jw, "builds");
+        jw_begin_array(jw);
+        jw_array_elem(jw);
+        jw_begin_object(jw);
         jw_object_field(jw, "target");
         Buf triple_buf = BUF_INIT;
         target_triple_zig(&triple_buf, g->zig_target);
         jw_string(jw, buf_ptr(&triple_buf));
+        jw_end_object(jw);
+        jw_end_array(jw);
 
         jw_object_field(jw, "rootName");
         jw_string(jw, buf_ptr(g->root_out_name));
@@ -1058,59 +1226,76 @@ void zig_print_analysis_dump(CodeGen *g, FILE *f, const char *one_indent, const 
     jw_object_field(jw, "calls");
     jw_begin_array(jw);
     {
+        ZigList<ZigVar *> var_stack = {};
+
         auto it = g->memoized_fn_eval_table.entry_iterator();
         for (;;) {
             auto *entry = it.next();
             if (!entry)
                 break;
 
-            jw_array_elem(jw);
-            jw_begin_object(jw);
-
-            jw_object_field(jw, "args");
-            jw_begin_object(jw);
+            var_stack.resize(0);
+            ZigFn *fn = nullptr;
 
             Scope *scope = entry->key;
             while (scope != nullptr) {
                 if (scope->id == ScopeIdVarDecl) {
                     ZigVar *var = reinterpret_cast<ScopeVarDecl *>(scope)->var;
-                    jw_object_field(jw, var->name);
-                    jw_begin_object(jw);
-                    jw_object_field(jw, "type");
-                    anal_dump_type_ref(&ctx, var->var_type);
-                    jw_object_field(jw, "value");
-                    anal_dump_value(&ctx, scope->source_node, var->var_type, var->const_value);
-                    jw_end_object(jw);
+                    var_stack.append(var);
                 } else if (scope->id == ScopeIdFnDef) {
-                    jw_end_object(jw);
-
-                    jw_object_field(jw, "fn");
-                    ZigFn *fn = reinterpret_cast<ScopeFnDef *>(scope)->fn_entry;
-                    anal_dump_fn_ref(&ctx, fn);
-
-                    ConstExprValue *result = entry->value;
-                    jw_object_field(jw, "result");
-                    jw_begin_object(jw);
-                    jw_object_field(jw, "type");
-                    anal_dump_type_ref(&ctx, result->type);
-                    jw_object_field(jw, "value");
-                    anal_dump_value(&ctx, scope->source_node, result->type, result);
-                    jw_end_object(jw);
+                    fn = reinterpret_cast<ScopeFnDef *>(scope)->fn_entry;
                     break;
                 }
                 scope = scope->parent;
             }
+            ConstExprValue *result = entry->value;
+
+            assert(fn != nullptr);
+
+            jw_array_elem(jw);
+            jw_begin_object(jw);
+
+            jw_object_field(jw, "fn");
+            anal_dump_fn_ref(&ctx, fn);
+
+            jw_object_field(jw, "result");
+            {
+                jw_begin_object(jw);
+
+                jw_object_field(jw, "type");
+                anal_dump_type_ref(&ctx, result->type);
+
+                jw_object_field(jw, "value");
+                anal_dump_value(&ctx, scope->source_node, result->type, result);
+
+                jw_end_object(jw);
+            }
+
+            if (var_stack.length != 0) {
+                jw_object_field(jw, "args");
+                jw_begin_array(jw);
+
+                while (var_stack.length != 0) {
+                    ZigVar *var = var_stack.pop();
+
+                    jw_array_elem(jw);
+                    jw_begin_object(jw);
+
+                    jw_object_field(jw, "type");
+                    anal_dump_type_ref(&ctx, var->var_type);
+
+                    jw_object_field(jw, "value");
+                    anal_dump_value(&ctx, scope->source_node, var->var_type, var->const_value);
+
+                    jw_end_object(jw);
+                }
+                jw_end_array(jw);
+            }
+
             jw_end_object(jw);
         }
-    }
-    jw_end_array(jw);
 
-    jw_object_field(jw, "fns");
-    jw_begin_array(jw);
-    for (uint32_t i = 0; i < ctx.fn_list.length; i += 1) {
-        ZigFn *fn = ctx.fn_list.at(i);
-        jw_array_elem(jw);
-        anal_dump_fn(&ctx, fn);
+        var_stack.deinit();
     }
     jw_end_array(jw);
 
@@ -1138,12 +1323,12 @@ void zig_print_analysis_dump(CodeGen *g, FILE *f, const char *one_indent, const 
     }
     jw_end_array(jw);
 
-    jw_object_field(jw, "files");
+    jw_object_field(jw, "fns");
     jw_begin_array(jw);
-    for (uint32_t i = 0; i < ctx.file_list.length; i += 1) {
-        Buf *file = ctx.file_list.at(i);
+    for (uint32_t i = 0; i < ctx.fn_list.length; i += 1) {
+        ZigFn *fn = ctx.fn_list.at(i);
         jw_array_elem(jw);
-        anal_dump_file(&ctx, file);
+        anal_dump_fn(&ctx, fn);
     }
     jw_end_array(jw);
 
@@ -1162,6 +1347,15 @@ void zig_print_analysis_dump(CodeGen *g, FILE *f, const char *one_indent, const 
         const AstNode *node = ctx.node_list.at(i);
         jw_array_elem(jw);
         anal_dump_node(&ctx, node);
+    }
+    jw_end_array(jw);
+
+    jw_object_field(jw, "files");
+    jw_begin_array(jw);
+    for (uint32_t i = 0; i < ctx.file_list.length; i += 1) {
+        Buf *file = ctx.file_list.at(i);
+        jw_array_elem(jw);
+        anal_dump_file(&ctx, file);
     }
     jw_end_array(jw);
 

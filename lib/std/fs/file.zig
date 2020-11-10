@@ -27,7 +27,7 @@ pub const File = struct {
 
     /// Call close to clean up.
     pub fn openRead(path: []const u8) OpenError!File {
-        if (windows.is_the_target) {
+        if (builtin.os == .windows) {
             const path_w = try windows.sliceToPrefixedFileW(path);
             return openReadW(&path_w);
         }
@@ -37,7 +37,7 @@ pub const File = struct {
 
     /// `openRead` except with a null terminated path
     pub fn openReadC(path: [*]const u8) OpenError!File {
-        if (windows.is_the_target) {
+        if (builtin.os == .windows) {
             const path_w = try windows.cStrToPrefixedFileW(path);
             return openReadW(&path_w);
         }
@@ -69,7 +69,7 @@ pub const File = struct {
     /// If a file already exists in the destination it will be truncated.
     /// Call close to clean up.
     pub fn openWriteMode(path: []const u8, file_mode: Mode) OpenError!File {
-        if (windows.is_the_target) {
+        if (builtin.os == .windows) {
             const path_w = try windows.sliceToPrefixedFileW(path);
             return openWriteModeW(&path_w, file_mode);
         }
@@ -79,7 +79,7 @@ pub const File = struct {
 
     /// Same as `openWriteMode` except `path` is null-terminated.
     pub fn openWriteModeC(path: [*]const u8, file_mode: Mode) OpenError!File {
-        if (windows.is_the_target) {
+        if (builtin.os == .windows) {
             const path_w = try windows.cStrToPrefixedFileW(path);
             return openWriteModeW(&path_w, file_mode);
         }
@@ -106,7 +106,7 @@ pub const File = struct {
     /// If a file already exists in the destination this returns OpenError.PathAlreadyExists
     /// Call close to clean up.
     pub fn openWriteNoClobber(path: []const u8, file_mode: Mode) OpenError!File {
-        if (windows.is_the_target) {
+        if (builtin.os == .windows) {
             const path_w = try windows.sliceToPrefixedFileW(path);
             return openWriteNoClobberW(&path_w, file_mode);
         }
@@ -115,7 +115,7 @@ pub const File = struct {
     }
 
     pub fn openWriteNoClobberC(path: [*]const u8, file_mode: Mode) OpenError!File {
-        if (windows.is_the_target) {
+        if (builtin.os == .windows) {
             const path_w = try windows.cStrToPrefixedFileW(path);
             return openWriteNoClobberW(&path_w, file_mode);
         }
@@ -174,10 +174,20 @@ pub const File = struct {
 
     /// Test whether ANSI escape codes will be treated as such.
     pub fn supportsAnsiEscapeCodes(self: File) bool {
-        if (windows.is_the_target) {
+        if (builtin.os == .windows) {
             return os.isCygwinPty(self.handle);
         }
-        return self.isTty();
+        if (self.isTty()) {
+            if (self.handle == os.STDOUT_FILENO or self.handle == os.STDERR_FILENO) {
+                // Use getenvC to workaround https://github.com/ziglang/zig/issues/3511
+                if (os.getenvC(c"TERM")) |term| {
+                    if (std.mem.eql(u8, term, "dumb"))
+                        return false;
+                }
+            }
+            return true;
+        }
+        return false;
     }
 
     pub const SeekError = os.SeekError;
@@ -204,7 +214,7 @@ pub const File = struct {
     }
 
     pub fn getEndPos(self: File) GetPosError!u64 {
-        if (windows.is_the_target) {
+        if (builtin.os == .windows) {
             return windows.GetFileSizeEx(self.handle);
         }
         return (try self.stat()).size;
@@ -213,7 +223,7 @@ pub const File = struct {
     pub const ModeError = os.FStatError;
 
     pub fn mode(self: File) ModeError!Mode {
-        if (windows.is_the_target) {
+        if (builtin.os == .windows) {
             return {};
         }
         return (try self.stat()).mode;
@@ -236,13 +246,14 @@ pub const File = struct {
     pub const StatError = os.FStatError;
 
     pub fn stat(self: File) StatError!Stat {
-        if (windows.is_the_target) {
+        if (builtin.os == .windows) {
             var io_status_block: windows.IO_STATUS_BLOCK = undefined;
             var info: windows.FILE_ALL_INFORMATION = undefined;
             const rc = windows.ntdll.NtQueryInformationFile(self.handle, &io_status_block, &info, @sizeOf(windows.FILE_ALL_INFORMATION), .FileAllInformation);
             switch (rc) {
                 windows.STATUS.SUCCESS => {},
                 windows.STATUS.BUFFER_OVERFLOW => {},
+                windows.STATUS.INVALID_PARAMETER => unreachable,
                 else => return windows.unexpectedStatus(rc),
             }
             return Stat{
@@ -269,22 +280,30 @@ pub const File = struct {
 
     pub const UpdateTimesError = os.FutimensError || windows.SetFileTimeError;
 
-    /// `atime`: access timestamp in nanoseconds
-    /// `mtime`: last modification timestamp in nanoseconds
-    pub fn updateTimes(self: File, atime: i64, mtime: i64) UpdateTimesError!void {
-        if (windows.is_the_target) {
+    /// The underlying file system may have a different granularity than nanoseconds,
+    /// and therefore this function cannot guarantee any precision will be stored.
+    /// Further, the maximum value is limited by the system ABI. When a value is provided
+    /// that exceeds this range, the value is clamped to the maximum.
+    pub fn updateTimes(
+        self: File,
+        /// access timestamp in nanoseconds
+        atime: i64,
+        /// last modification timestamp in nanoseconds
+        mtime: i64,
+    ) UpdateTimesError!void {
+        if (builtin.os == .windows) {
             const atime_ft = windows.nanoSecondsToFileTime(atime);
             const mtime_ft = windows.nanoSecondsToFileTime(mtime);
             return windows.SetFileTime(self.handle, null, &atime_ft, &mtime_ft);
         }
         const times = [2]os.timespec{
             os.timespec{
-                .tv_sec = @divFloor(atime, std.time.ns_per_s),
-                .tv_nsec = @mod(atime, std.time.ns_per_s),
+                .tv_sec = math.cast(isize, @divFloor(atime, std.time.ns_per_s)) catch maxInt(isize),
+                .tv_nsec = math.cast(isize, @mod(atime, std.time.ns_per_s)) catch maxInt(isize),
             },
             os.timespec{
-                .tv_sec = @divFloor(mtime, std.time.ns_per_s),
-                .tv_nsec = @mod(mtime, std.time.ns_per_s),
+                .tv_sec = math.cast(isize, @divFloor(mtime, std.time.ns_per_s)) catch maxInt(isize),
+                .tv_nsec = math.cast(isize, @mod(mtime, std.time.ns_per_s)) catch maxInt(isize),
             },
         };
         try os.futimens(self.handle, &times);

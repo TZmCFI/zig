@@ -19,8 +19,8 @@ test "makePath, put some files in it, deleteTree" {
     try fs.makePath(a, "os_test_tmp" ++ fs.path.sep_str ++ "b" ++ fs.path.sep_str ++ "c");
     try io.writeFile("os_test_tmp" ++ fs.path.sep_str ++ "b" ++ fs.path.sep_str ++ "c" ++ fs.path.sep_str ++ "file.txt", "nonsense");
     try io.writeFile("os_test_tmp" ++ fs.path.sep_str ++ "b" ++ fs.path.sep_str ++ "file2.txt", "blah");
-    try fs.deleteTree(a, "os_test_tmp");
-    if (fs.Dir.open(a, "os_test_tmp")) |dir| {
+    try fs.deleteTree("os_test_tmp");
+    if (fs.Dir.open("os_test_tmp")) |dir| {
         @panic("expected error");
     } else |err| {
         expect(err == error.FileNotFound);
@@ -37,7 +37,7 @@ test "access file" {
 
     try io.writeFile("os_test_tmp" ++ fs.path.sep_str ++ "file.txt", "");
     try os.access("os_test_tmp" ++ fs.path.sep_str ++ "file.txt", os.F_OK);
-    try fs.deleteTree(a, "os_test_tmp");
+    try fs.deleteTree("os_test_tmp");
 }
 
 fn testThreadIdFn(thread_id: *Thread.Id) void {
@@ -53,7 +53,7 @@ test "std.Thread.getCurrentId" {
     thread.wait();
     if (Thread.use_pthreads) {
         expect(thread_current_id == thread_id);
-    } else if (os.windows.is_the_target) {
+    } else if (builtin.os == .windows) {
         expect(Thread.getCurrentId() != thread_current_id);
     } else {
         // If the thread completes very quickly, then thread_id can be 0. See the
@@ -212,7 +212,7 @@ test "dl_iterate_phdr" {
 }
 
 test "gethostname" {
-    if (os.windows.is_the_target)
+    if (builtin.os == .windows)
         return error.SkipZigTest;
 
     var buf: [os.HOST_NAME_MAX]u8 = undefined;
@@ -221,7 +221,7 @@ test "gethostname" {
 }
 
 test "pipe" {
-    if (os.windows.is_the_target)
+    if (builtin.os == .windows)
         return error.SkipZigTest;
 
     var fds = try os.pipe();
@@ -231,4 +231,9 @@ test "pipe" {
     testing.expectEqualSlices(u8, buf[0..5], "hello");
     os.close(fds[1]);
     os.close(fds[0]);
+}
+
+test "argsAlloc" {
+    var args = try std.process.argsAlloc(std.heap.direct_allocator);
+    std.heap.direct_allocator.free(args);
 }

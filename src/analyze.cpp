@@ -120,6 +120,12 @@ static ScopeExpr *find_expr_scope(Scope *scope) {
     }
 }
 
+static void update_progress_display(CodeGen *g) {
+    stage2_progress_update_node(g->sub_progress_node, 
+        g->resolve_queue_index + g->fn_defs_index,
+        g->resolve_queue.length + g->fn_defs.length);
+}
+
 ScopeDecls *get_container_scope(ZigType *type_entry) {
     return *get_container_scope_ptr(type_entry);
 }
@@ -913,11 +919,13 @@ bool want_first_arg_sret(CodeGen *g, FnTypeId *fn_type_id) {
     if (type_is_c_abi_int(g, fn_type_id->return_type)) {
         return false;
     }
-    if (g->zig_target->arch == ZigLLVM_x86_64) {
+    if (g->zig_target->arch == ZigLLVM_x86 ||
+        g->zig_target->arch == ZigLLVM_x86_64 ||
+        target_is_arm(g->zig_target) ||
+        target_is_riscv(g->zig_target))
+    {
         X64CABIClass abi_class = type_c_abi_x86_64_class(g, fn_type_id->return_type);
-        return abi_class == X64CABIClass_MEMORY;
-    } else if (target_is_arm(g->zig_target) || target_is_riscv(g->zig_target)) {
-        return type_size(g, fn_type_id->return_type) > 16;
+        return abi_class == X64CABIClass_MEMORY || abi_class == X64CABIClass_MEMORY_nobyval;
     } else if (g->zig_target->arch == ZigLLVM_mipsel) {
         return false;
     }
@@ -996,7 +1004,12 @@ static ZigType *get_root_container_type(CodeGen *g, const char *full_name, Buf *
     entry->data.structure.root_struct = root_struct;
     entry->data.structure.layout = ContainerLayoutAuto;
 
-    buf_init_from_str(&entry->name, full_name);
+    if (full_name[0] == '\0') {
+        buf_init_from_str(&entry->name, "(root)");
+    } else {
+        buf_init_from_str(&entry->name, full_name);
+    }
+
     return entry;
 }
 
@@ -1779,6 +1792,7 @@ static ZigType *analyze_fn_type(CodeGen *g, AstNode *proto_node, Scope *child_sc
         if (!analyze_const_align(g, child_scope, fn_proto->align_expr, &fn_type_id.alignment)) {
             return g->builtin_types.entry_invalid;
         }
+        fn_entry->align_bytes = fn_type_id.alignment;
     }
 
     if (fn_proto->return_var_token != nullptr) {
@@ -3153,7 +3167,13 @@ static Error resolve_union_zero_bits(CodeGen *g, ZigType *union_type) {
     return ErrorNone;
 }
 
-static void get_fully_qualified_decl_name(Buf *buf, Tld *tld, bool is_test) {
+void append_namespace_qualification(CodeGen *g, Buf *buf, ZigType *container_type) {
+    if (g->root_import == container_type || buf_len(&container_type->name) == 0) return;
+    buf_append_buf(buf, &container_type->name);
+    buf_append_char(buf, NAMESPACE_SEP_CHAR);
+}
+
+static void get_fully_qualified_decl_name(CodeGen *g, Buf *buf, Tld *tld, bool is_test) {
     buf_resize(buf, 0);
 
     Scope *scope = tld->parent_scope;
@@ -3161,8 +3181,7 @@ static void get_fully_qualified_decl_name(Buf *buf, Tld *tld, bool is_test) {
         scope = scope->parent;
     }
     ScopeDecls *decls_scope = reinterpret_cast<ScopeDecls *>(scope);
-    buf_append_buf(buf, &decls_scope->container_type->name);
-    if (buf_len(buf) != 0) buf_append_char(buf, NAMESPACE_SEP_CHAR);
+    append_namespace_qualification(g, buf, decls_scope->container_type);
     if (is_test) {
         buf_append_str(buf, "test \"");
         buf_append_buf(buf, tld->name);
@@ -3210,21 +3229,6 @@ static bool scope_is_root_decls(Scope *scope) {
         scope = scope->parent;
     }
     zig_unreachable();
-}
-
-void typecheck_panic_fn(CodeGen *g, TldFn *tld_fn, ZigFn *panic_fn) {
-    ConstExprValue *panic_fn_type_val = get_builtin_value(g, "PanicFn");
-    assert(panic_fn_type_val != nullptr);
-    assert(panic_fn_type_val->type->id == ZigTypeIdMetaType);
-    ZigType *panic_fn_type = panic_fn_type_val->data.x_type;
-
-    AstNode *fake_decl = allocate<AstNode>(1);
-    *fake_decl = *panic_fn->proto_node;
-    fake_decl->type = NodeTypeSymbol;
-    fake_decl->data.symbol_expr.symbol = tld_fn->base.name;
-
-    // call this for the side effects of casting to panic_fn_type
-    analyze_const_value(g, tld_fn->base.parent_scope, fake_decl, panic_fn_type, nullptr, UndefBad);
 }
 
 ZigType *get_test_fn_type(CodeGen *g) {
@@ -3285,7 +3289,7 @@ static void resolve_decl_fn(CodeGen *g, TldFn *tld_fn) {
         if (fn_proto->is_export || is_extern) {
             buf_init_from_buf(&fn_table_entry->symbol_name, tld_fn->base.name);
         } else {
-            get_fully_qualified_decl_name(&fn_table_entry->symbol_name, &tld_fn->base, false);
+            get_fully_qualified_decl_name(g, &fn_table_entry->symbol_name, &tld_fn->base, false);
         }
 
         if (fn_proto->is_export) {
@@ -3314,7 +3318,9 @@ static void resolve_decl_fn(CodeGen *g, TldFn *tld_fn) {
         fn_table_entry->type_entry = analyze_fn_type(g, source_node, child_scope, fn_table_entry);
 
         if (fn_proto->section_expr != nullptr) {
-            analyze_const_string(g, child_scope, fn_proto->section_expr, &fn_table_entry->section_name);
+            if (!analyze_const_string(g, child_scope, fn_proto->section_expr, &fn_table_entry->section_name)) {
+                fn_table_entry->type_entry = g->builtin_types.entry_invalid;
+            }
         }
 
         if (fn_table_entry->type_entry->id == ZigTypeIdInvalid) {
@@ -3334,22 +3340,15 @@ static void resolve_decl_fn(CodeGen *g, TldFn *tld_fn) {
             fn_table_entry->inferred_async_node = fn_table_entry->proto_node;
         }
 
-        if (scope_is_root_decls(tld_fn->base.parent_scope) &&
-            (import == g->root_import || import->data.structure.root_struct->package == g->panic_package))
-        {
+        if (scope_is_root_decls(tld_fn->base.parent_scope) && import == g->root_import) {
             if (g->have_pub_main && buf_eql_str(tld_fn->base.name, "main")) {
                 g->main_fn = fn_table_entry;
-            } else if ((import->data.structure.root_struct->package == g->panic_package || g->have_pub_panic) &&
-                    buf_eql_str(tld_fn->base.name, "panic"))
-            {
-                g->panic_fn = fn_table_entry;
-                g->panic_tld_fn = tld_fn;
             }
         }
     } else if (source_node->type == NodeTypeTestDecl) {
         ZigFn *fn_table_entry = create_fn_raw(g, FnInlineAuto);
 
-        get_fully_qualified_decl_name(&fn_table_entry->symbol_name, &tld_fn->base, true);
+        get_fully_qualified_decl_name(g, &fn_table_entry->symbol_name, &tld_fn->base, true);
 
         tld_fn->fn_entry = fn_table_entry;
 
@@ -3923,6 +3922,7 @@ void resolve_top_level_decl(CodeGen *g, Tld *tld, AstNode *source_node, bool all
         return;
 
     tld->resolution = TldResolutionResolving;
+    update_progress_display(g);
 
     switch (tld->id) {
         case TldIdVar: {
@@ -4576,6 +4576,7 @@ static void analyze_fn_body(CodeGen *g, ZigFn *fn_table_entry) {
         return;
 
     fn_table_entry->anal_state = FnAnalStateProbing;
+    update_progress_display(g);
 
     AstNode *return_type_node = (fn_table_entry->proto_node != nullptr) ?
         fn_table_entry->proto_node->data.fn_proto.return_type : fn_table_entry->fndef_scope->base.source_node;
@@ -4686,8 +4687,8 @@ ZigType *add_source_file(CodeGen *g, ZigPackage *package, Buf *resolved_path, Bu
         ast_print(stderr, root_node, 0);
     }
 
-    if (source_kind == SourceKindRoot || package == g->panic_package) {
-        // Look for panic and main
+    if (source_kind == SourceKindRoot) {
+        // Look for main
         for (size_t decl_i = 0; decl_i < root_node->data.container_decl.decls.length; decl_i += 1) {
             AstNode *top_level_decl = root_node->data.container_decl.decls.at(decl_i);
 
@@ -4700,8 +4701,6 @@ ZigType *add_source_file(CodeGen *g, ZigPackage *package, Buf *resolved_path, Bu
                 if (is_pub) {
                     if (buf_eql_str(proto_name, "main")) {
                         g->have_pub_main = true;
-                    } else if (buf_eql_str(proto_name, "panic")) {
-                        g->have_pub_panic = true;
                     }
                 }
             }
@@ -5767,8 +5766,8 @@ ConstExprValue *create_const_arg_tuple(CodeGen *g, size_t arg_index_start, size_
 
 
 ConstExprValue *create_const_vals(size_t count) {
-    ConstGlobalRefs *global_refs = allocate<ConstGlobalRefs>(count);
-    ConstExprValue *vals = allocate<ConstExprValue>(count);
+    ConstGlobalRefs *global_refs = allocate<ConstGlobalRefs>(count, "ConstGlobalRefs");
+    ConstExprValue *vals = allocate<ConstExprValue>(count, "ConstExprValue");
     for (size_t i = 0; i < count; i += 1) {
         vals[i].global_refs = &global_refs[i];
     }
@@ -7509,6 +7508,11 @@ X64CABIClass type_c_abi_x86_64_class(CodeGen *g, ZigType *ty) {
 
     if (g->zig_target->os == OsWindows || g->zig_target->os == OsUefi) {
         return type_windows_abi_x86_64_class(g, ty, ty_size);
+    } else if (g->zig_target->arch == ZigLLVM_aarch64 ||
+            g->zig_target->arch == ZigLLVM_aarch64_be)
+    {
+        X64CABIClass result = type_system_V_abi_x86_64_class(g, ty, ty_size);
+        return (result == X64CABIClass_MEMORY) ? X64CABIClass_MEMORY_nobyval : result;
     } else {
         return type_system_V_abi_x86_64_class(g, ty, ty_size);
     }
@@ -8291,7 +8295,8 @@ static void resolve_llvm_types_integer(CodeGen *g, ZigType *type) {
         }
     }
 
-    type->llvm_di_type = ZigLLVMCreateDebugBasicType(g->dbuilder, buf_ptr(&type->name), type->size_in_bits, dwarf_tag);
+    type->llvm_di_type = ZigLLVMCreateDebugBasicType(g->dbuilder, buf_ptr(&type->name),
+            type->abi_size * 8, dwarf_tag);
     type->llvm_type = LLVMIntType(type->size_in_bits);
 }
 
@@ -8585,6 +8590,9 @@ static void resolve_llvm_types_fn_type(CodeGen *g, ZigType *fn_type) {
     fn_type->llvm_di_type = ZigLLVMCreateDebugPointerType(g->dbuilder, fn_type->data.fn.raw_di_type,
             LLVMStoreSizeOfType(g->target_data_ref, fn_type->llvm_type),
             LLVMABIAlignmentOfType(g->target_data_ref, fn_type->llvm_type), "");
+
+    gen_param_types.deinit();
+    param_di_types.deinit();
 }
 
 void resolve_llvm_types_fn(CodeGen *g, ZigFn *fn) {
@@ -8619,6 +8627,9 @@ void resolve_llvm_types_fn(CodeGen *g, ZigFn *fn) {
     fn->raw_type_ref = LLVMFunctionType(get_llvm_type(g, gen_return_type),
             gen_param_types.items, gen_param_types.length, false);
     fn->raw_di_type = ZigLLVMCreateSubroutineType(g->dbuilder, param_di_types.items, (int)param_di_types.length, 0);
+
+    param_di_types.deinit();
+    gen_param_types.deinit();
 }
 
 static void resolve_llvm_types_anyerror(CodeGen *g) {
@@ -8643,6 +8654,8 @@ static void resolve_llvm_types_anyerror(CodeGen *g) {
             tag_debug_align_in_bits,
             err_enumerators.items, err_enumerators.length,
             get_llvm_di_type(g, g->err_tag_type), "");
+
+    err_enumerators.deinit();
 }
 
 static void resolve_llvm_types_async_frame(CodeGen *g, ZigType *frame_type, ResolveStatus wanted_resolve_status) {
@@ -8788,6 +8801,9 @@ static void resolve_llvm_types_any_frame(CodeGen *g, ZigType *any_frame_type, Re
             nullptr, di_element_types.items, di_element_types.length, 0, nullptr, "");
 
     ZigLLVMReplaceTemporary(g->dbuilder, frame_header_di_type, replacement_di_type);
+
+    field_types.deinit();
+    di_element_types.deinit();
 }
 
 static void resolve_llvm_types(CodeGen *g, ZigType *type, ResolveStatus wanted_resolve_status) {
@@ -8894,5 +8910,64 @@ IrInstruction *ir_create_alloca(CodeGen *g, Scope *scope, AstNode *source_node, 
     alloca_gen->name_hint = name_hint;
     fn->alloca_gen_list.append(alloca_gen);
     return &alloca_gen->base;
+}
+
+Error analyze_import(CodeGen *g, ZigType *source_import, Buf *import_target_str,
+        ZigType **out_import, Buf **out_import_target_path, Buf *out_full_path)
+{
+    Error err;
+
+    Buf *search_dir;
+    ZigPackage *cur_scope_pkg = source_import->data.structure.root_struct->package;
+    assert(cur_scope_pkg);
+    ZigPackage *target_package;
+    auto package_entry = cur_scope_pkg->package_table.maybe_get(import_target_str);
+    SourceKind source_kind;
+    if (package_entry) {
+        target_package = package_entry->value;
+        *out_import_target_path = &target_package->root_src_path;
+        search_dir = &target_package->root_src_dir;
+        source_kind = SourceKindPkgMain;
+    } else {
+        // try it as a filename
+        target_package = cur_scope_pkg;
+        *out_import_target_path = import_target_str;
+
+        // search relative to importing file
+        search_dir = buf_alloc();
+        os_path_dirname(source_import->data.structure.root_struct->path, search_dir);
+
+        source_kind = SourceKindNonRoot;
+    }
+
+    buf_resize(out_full_path, 0);
+    os_path_join(search_dir, *out_import_target_path, out_full_path);
+
+    Buf *import_code = buf_alloc();
+    Buf *resolved_path = buf_alloc();
+
+    Buf *resolve_paths[] = { out_full_path, };
+    *resolved_path = os_path_resolve(resolve_paths, 1);
+
+    auto import_entry = g->import_table.maybe_get(resolved_path);
+    if (import_entry) {
+        *out_import = import_entry->value;
+        return ErrorNone;
+    }
+
+    if (source_kind == SourceKindNonRoot) {
+        Buf *pkg_root_src_dir = &cur_scope_pkg->root_src_dir;
+        Buf resolved_root_src_dir = os_path_resolve(&pkg_root_src_dir, 1);
+        if (!buf_starts_with_buf(resolved_path, &resolved_root_src_dir)) {
+            return ErrorImportOutsidePkgPath;
+        }
+    }
+
+    if ((err = file_fetch(g, resolved_path, import_code))) {
+        return err;
+    }
+
+    *out_import = add_source_file(g, target_package, resolved_path, import_code, source_kind);
+    return ErrorNone;
 }
 

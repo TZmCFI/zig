@@ -133,7 +133,7 @@ pub fn dumpStackTraceFromBase(bp: usize, ip: usize) void {
 /// chopping off the irrelevant frames and shifting so that the returned addresses pointer
 /// equals the passed in addresses pointer.
 pub fn captureStackTrace(first_address: ?usize, stack_trace: *builtin.StackTrace) void {
-    if (windows.is_the_target) {
+    if (builtin.os == .windows) {
         const addrs = stack_trace.instruction_addresses;
         const u32_addrs_len = @intCast(u32, addrs.len);
         const first_addr = first_address orelse {
@@ -280,14 +280,23 @@ pub const StackIterator = struct {
         };
     }
 
+    // On some architectures such as x86 the frame pointer is the address where
+    // the previous fp is stored, while on some other architectures such as
+    // RISC-V it points to the "top" of the frame, just above where the previous
+    // fp and the return address are stored.
+    const fp_adjust_factor = if (builtin.arch == .riscv32 or builtin.arch == .riscv64)
+        2 * @sizeOf(usize)
+    else
+        0;
+
     fn next(self: *StackIterator) ?usize {
-        if (self.fp == 0) return null;
-        self.fp = @intToPtr(*const usize, self.fp).*;
-        if (self.fp == 0) return null;
+        if (self.fp <= fp_adjust_factor) return null;
+        self.fp = @intToPtr(*const usize, self.fp - fp_adjust_factor).*;
+        if (self.fp <= fp_adjust_factor) return null;
 
         if (self.first_addr) |addr| {
-            while (self.fp != 0) : (self.fp = @intToPtr(*const usize, self.fp).*) {
-                const return_address = @intToPtr(*const usize, self.fp + @sizeOf(usize)).*;
+            while (self.fp > fp_adjust_factor) : (self.fp = @intToPtr(*const usize, self.fp - fp_adjust_factor).*) {
+                const return_address = @intToPtr(*const usize, self.fp - fp_adjust_factor + @sizeOf(usize)).*;
                 if (addr == return_address) {
                     self.first_addr = null;
                     return return_address;
@@ -295,13 +304,13 @@ pub const StackIterator = struct {
             }
         }
 
-        const return_address = @intToPtr(*const usize, self.fp + @sizeOf(usize)).*;
+        const return_address = @intToPtr(*const usize, self.fp - fp_adjust_factor + @sizeOf(usize)).*;
         return return_address;
     }
 };
 
 pub fn writeCurrentStackTrace(out_stream: var, debug_info: *DebugInfo, tty_color: bool, start_addr: ?usize) !void {
-    if (windows.is_the_target) {
+    if (builtin.os == .windows) {
         return writeCurrentStackTraceWindows(out_stream, debug_info, tty_color, start_addr);
     }
     var it = StackIterator.init(start_addr);
@@ -333,10 +342,10 @@ pub fn writeCurrentStackTraceWindows(
 /// TODO once https://github.com/ziglang/zig/issues/3157 is fully implemented,
 /// make this `noasync fn` and remove the individual noasync calls.
 pub fn printSourceAtAddress(debug_info: *DebugInfo, out_stream: var, address: usize, tty_color: bool) !void {
-    if (windows.is_the_target) {
+    if (builtin.os == .windows) {
         return noasync printSourceAtAddressWindows(debug_info, out_stream, address, tty_color);
     }
-    if (os.darwin.is_the_target) {
+    if (comptime std.Target.current.isDarwin()) {
         return noasync printSourceAtAddressMacOs(debug_info, out_stream, address, tty_color);
     }
     return noasync printSourceAtAddressPosix(debug_info, out_stream, address, tty_color);
@@ -823,10 +832,10 @@ pub const OpenSelfDebugInfoError = error{
 pub fn openSelfDebugInfo(allocator: *mem.Allocator) !DebugInfo {
     if (builtin.strip_debug_info)
         return error.MissingDebugInfo;
-    if (windows.is_the_target) {
+    if (builtin.os == .windows) {
         return noasync openSelfDebugInfoWindows(allocator);
     }
-    if (os.darwin.is_the_target) {
+    if (comptime std.Target.current.isDarwin()) {
         return noasync openSelfDebugInfoMacOs(allocator);
     }
     return noasync openSelfDebugInfoPosix(allocator);
@@ -2355,7 +2364,7 @@ pub fn attachSegfaultHandler() void {
     if (!have_segfault_handling_support) {
         @compileError("segfault handler not supported for this target");
     }
-    if (windows.is_the_target) {
+    if (builtin.os == .windows) {
         windows_segfault_handle = windows.kernel32.AddVectoredExceptionHandler(0, handleSegfaultWindows);
         return;
     }
@@ -2369,7 +2378,7 @@ pub fn attachSegfaultHandler() void {
 }
 
 fn resetSegfaultHandler() void {
-    if (windows.is_the_target) {
+    if (builtin.os == .windows) {
         if (windows_segfault_handle) |handle| {
             assert(windows.kernel32.RemoveVectoredExceptionHandler(handle) != 0);
             windows_segfault_handle = null;

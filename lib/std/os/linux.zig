@@ -13,7 +13,6 @@ const elf = std.elf;
 const vdso = @import("linux/vdso.zig");
 const dl = @import("../dynamic_library.zig");
 
-pub const is_the_target = builtin.os == .linux;
 pub usingnamespace switch (builtin.arch) {
     .x86_64 => @import("linux/x86_64.zig"),
     .aarch64 => @import("linux/arm64.zig"),
@@ -860,6 +859,20 @@ pub fn fstatat(dirfd: i32, path: [*]const u8, stat_buf: *Stat, flags: u32) usize
     }
 }
 
+pub fn statx(dirfd: i32, path: [*]const u8, flags: u32, mask: u32, statx_buf: *Statx) usize {
+    if (@hasDecl(@This(), "SYS_statx")) {
+        return syscall5(
+            SYS_statx,
+            @bitCast(usize, isize(dirfd)),
+            @ptrToInt(path),
+            flags,
+            mask,
+            @ptrToInt(statx_buf),
+        );
+    }
+    return @bitCast(usize, isize(-ENOSYS));
+}
+
 // TODO https://github.com/ziglang/zig/issues/265
 pub fn listxattr(path: [*]const u8, list: [*]u8, size: usize) usize {
     return syscall3(SYS_listxattr, @ptrToInt(path), @ptrToInt(list), size);
@@ -1065,7 +1078,7 @@ pub fn io_uring_register(fd: i32, opcode: u32, arg: ?*const c_void, nr_args: u32
 }
 
 test "" {
-    if (is_the_target) {
+    if (builtin.os == .linux) {
         _ = @import("linux/test.zig");
     }
 }
