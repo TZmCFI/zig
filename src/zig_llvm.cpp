@@ -223,6 +223,9 @@ bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machine_ref, LLVMM
     // Set output pass.
     TargetMachine::CodeGenFileType ft;
     if (output_type == ZigLLVM_EmitLLVMBc) {
+        // Hack: This flag is needed only when using CFI sanitizer
+        unwrap(module_ref)->addModuleFlag(Module::Error, "EnableSplitLTOUnit", true);
+
         MPM.add(createWriteThinLTOBitcodePass(dest, nullptr));
     } else if (output_type != ZigLLVM_EmitLLVMIr) {
         switch (output_type) {
