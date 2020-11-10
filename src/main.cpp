@@ -75,6 +75,7 @@ static int print_full_usage(const char *arg0, FILE *file, int return_code) {
         "  --release-small              build with size optimizations on and safety off\n"
         "  --single-threaded            source may assume it is only used single-threaded\n"
         "  --lto                        enable cross-language LTO\n"
+        "  -fsanitize=shadow-call-stack (unsupported) enable shadow call stack sanitizer\n"
         "  -dynamic                     create a shared library (.so; .dll; .dylib)\n"
         "  --strip                      exclude debug symbols\n"
         "  -target [name]               <arch><sub>-<os>-<abi> see the targets command\n"
@@ -485,6 +486,7 @@ int main(int argc, char **argv) {
     CliPkg *cur_pkg = allocate<CliPkg>(1);
     BuildMode build_mode = BuildModeDebug;
     bool enable_lto = false;
+    bool enable_shadow_call_stack = false;
     ZigList<const char *> test_exec_args = {0};
     int runtime_args_start = -1;
     bool system_linker_hack = false;
@@ -642,6 +644,8 @@ int main(int argc, char **argv) {
                 build_mode = BuildModeSmallRelease;
             } else if (strcmp(arg, "--lto") == 0) {
                 enable_lto = true;
+            } else if (strcmp(arg, "-fsanitize=shadow-call-stack") == 0) {
+                enable_shadow_call_stack = true;
             } else if (strcmp(arg, "--help") == 0) {
                 if (cmd == CmdLibC) {
                     return print_libc_usage(arg0, stdout, EXIT_SUCCESS);
@@ -1180,6 +1184,7 @@ int main(int argc, char **argv) {
             g->system_linker_hack = system_linker_hack;
             g->function_sections = function_sections;
             g->enable_lto = enable_lto;
+            g->enable_shadow_call_stack = enable_shadow_call_stack;
 
             for (size_t i = 0; i < lib_dirs.length; i += 1) {
                 codegen_add_lib_dir(g, lib_dirs.at(i));

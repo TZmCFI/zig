@@ -2016,6 +2016,8 @@ struct CodeGen {
     bool need_frame_size_prefix_data;
     bool enable_lto;
 
+    bool enable_shadow_call_stack;
+
     //////////////////////////// Participates in Input Parameter Cache Hash
     /////// Note: there is a separate cache hash for builtin.zig, when adding fields,
     ///////       consider if they need to go into both.

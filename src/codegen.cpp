@@ -491,6 +491,11 @@ static LLVMValueRef make_fn_llvm_value(CodeGen *g, ZigFn *fn) {
         ZigLLVMAddFunctionAttrCold(llvm_fn);
     }
 
+    if (g->enable_shadow_call_stack) {
+        // TODO: Should check if the target actually supports it
+        // TODO: Support selectively disabling shadow call stack
+        addLLVMFnAttr(llvm_fn, "shadowcallstack");
+    }
 
     LLVMSetLinkage(llvm_fn, to_llvm_linkage(linkage));
 
@@ -8583,6 +8588,7 @@ static Error define_builtin_compile_vars(CodeGen *g) {
     cache_bool(&cache_hash, g->is_test_build);
     cache_bool(&cache_hash, g->is_single_threaded);
     cache_bool(&cache_hash, g->enable_lto);
+    cache_bool(&cache_hash, g->enable_shadow_call_stack);
     cache_int(&cache_hash, g->zig_target->is_native);
     cache_int(&cache_hash, g->zig_target->arch);
     cache_int(&cache_hash, g->zig_target->sub_arch);

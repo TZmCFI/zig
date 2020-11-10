@@ -1447,6 +1447,7 @@ pub const LibExeObjStep = struct {
     filter: ?[]const u8,
     single_threaded: bool,
     enable_lto: bool,
+    enable_shadow_call_stack: bool,
 
     root_src: ?[]const u8,
     out_h_filename: []const u8,
@@ -1584,6 +1585,7 @@ pub const LibExeObjStep = struct {
             .need_system_paths = false,
             .single_threaded = false,
             .enable_lto = false,
+            .enable_shadow_call_stack = false,
             .installed_path = null,
             .install_step = null,
         };
@@ -2124,6 +2126,10 @@ pub const LibExeObjStep = struct {
 
         if (self.enable_lto) {
             try zig_args.append("--lto");
+        }
+
+        if (self.enable_shadow_call_stack) {
+            try zig_args.append("-fsanitize=shadow-call-stack");
         }
 
         if (self.libc_file) |libc_file| {
