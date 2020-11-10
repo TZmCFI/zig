@@ -514,6 +514,25 @@ pub fn eql(comptime T: type, a: []const T, b: []const T) bool {
     return true;
 }
 
+/// Compares two slices and returns the index of the first inequality.
+/// Returns null if the slices are equal.
+pub fn indexOfDiff(comptime T: type, a: []const T, b: []const T) ?usize {
+    const shortest = math.min(a.len, b.len);
+    if (a.ptr == b.ptr)
+        return if (a.len == b.len) null else shortest;
+    var index: usize = 0;
+    while (index < shortest) : (index += 1) if (a[index] != b[index]) return index;
+    return if (a.len == b.len) null else shortest;
+}
+
+test "indexOfDiff" {
+    testing.expectEqual(indexOfDiff(u8, "one", "one"), null);
+    testing.expectEqual(indexOfDiff(u8, "one two", "one"), 3);
+    testing.expectEqual(indexOfDiff(u8, "one", "one two"), 3);
+    testing.expectEqual(indexOfDiff(u8, "one twx", "one two"), 6);
+    testing.expectEqual(indexOfDiff(u8, "xne", "one"), 0);
+}
+
 pub const toSliceConst = @compileError("deprecated; use std.mem.spanZ");
 pub const toSlice = @compileError("deprecated; use std.mem.spanZ");
 
@@ -1065,7 +1084,7 @@ pub fn writeIntSliceLittle(comptime T: type, buffer: []u8, value: T) void {
         return set(u8, buffer, 0);
 
     // TODO I want to call writeIntLittle here but comptime eval facilities aren't good enough
-    const uint = std.meta.IntType(false, T.bit_count);
+    const uint = std.meta.Int(false, T.bit_count);
     var bits = @truncate(uint, value);
     for (buffer) |*b| {
         b.* = @truncate(u8, bits);
@@ -1085,7 +1104,7 @@ pub fn writeIntSliceBig(comptime T: type, buffer: []u8, value: T) void {
         return set(u8, buffer, 0);
 
     // TODO I want to call writeIntBig here but comptime eval facilities aren't good enough
-    const uint = std.meta.IntType(false, T.bit_count);
+    const uint = std.meta.Int(false, T.bit_count);
     var bits = @truncate(uint, value);
     var index: usize = buffer.len;
     while (index != 0) {
@@ -2027,7 +2046,13 @@ test "sliceAsBytes and bytesAsSlice back" {
 /// Round an address up to the nearest aligned address
 /// The alignment must be a power of 2 and greater than 0.
 pub fn alignForward(addr: usize, alignment: usize) usize {
-    return alignBackward(addr + (alignment - 1), alignment);
+    return alignForwardGeneric(usize, addr, alignment);
+}
+
+/// Round an address up to the nearest aligned address
+/// The alignment must be a power of 2 and greater than 0.
+pub fn alignForwardGeneric(comptime T: type, addr: T, alignment: T) T {
+    return alignBackwardGeneric(T, addr + (alignment - 1), alignment);
 }
 
 test "alignForward" {
@@ -2048,8 +2073,14 @@ test "alignForward" {
 /// Round an address up to the previous aligned address
 /// The alignment must be a power of 2 and greater than 0.
 pub fn alignBackward(addr: usize, alignment: usize) usize {
-    assert(@popCount(usize, alignment) == 1);
-    // 000010000 // example addr
+    return alignBackwardGeneric(usize, addr, alignment);
+}
+
+/// Round an address up to the previous aligned address
+/// The alignment must be a power of 2 and greater than 0.
+pub fn alignBackwardGeneric(comptime T: type, addr: T, alignment: T) T {
+    assert(@popCount(T, alignment) == 1);
+    // 000010000 // example alignment
     // 000001111 // subtract 1
     // 111110000 // binary not
     return addr & ~(alignment - 1);
