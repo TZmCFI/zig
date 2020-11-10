@@ -332,6 +332,8 @@ static void destroy_instruction(IrInstruction *inst) {
             return destroy(reinterpret_cast<IrInstructionUnionFieldPtr *>(inst), name);
         case IrInstructionIdSetCold:
             return destroy(reinterpret_cast<IrInstructionSetCold *>(inst), name);
+        case IrInstructionIdSetTcExcHandler:
+            return destroy(reinterpret_cast<IrInstructionSetTcExcHandler *>(inst), name);
         case IrInstructionIdSetRuntimeSafety:
             return destroy(reinterpret_cast<IrInstructionSetRuntimeSafety *>(inst), name);
         case IrInstructionIdSetFloatMode:
