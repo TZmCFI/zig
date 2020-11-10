@@ -7719,18 +7719,6 @@ static const CIntTypeInfo c_int_type_infos[] = {
 
 static const bool is_signed_list[] = { false, true, };
 
-struct GlobalLinkageValue {
-    GlobalLinkageId id;
-    const char *name;
-};
-
-static const GlobalLinkageValue global_linkage_values[] = {
-    {GlobalLinkageIdInternal, "Internal"},
-    {GlobalLinkageIdStrong, "Strong"},
-    {GlobalLinkageIdWeak, "Weak"},
-    {GlobalLinkageIdLinkOnce, "LinkOnce"},
-};
-
 static void add_fp_entry(CodeGen *g, const char *name, uint32_t bit_count, LLVMTypeRef type_ref,
         ZigType **field)
 {
